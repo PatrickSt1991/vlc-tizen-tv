@@ -1,0 +1,35 @@
+# ── Build outputs ──────────────────────────────────────────────────
+dist/
+build/
+*.wgt
+*.tpk
+
+# ── Tizen Studio per-build artifacts ───────────────────────────────
+tizen-web-vlc/.buildResult/
+tizen-web-vlc/.buildResult.zip
+tizen-web-vlc/.tproject
+tizen-web-vlc/.project
+tizen-studio/
+tizen-studio-data/
+tizen-installer
+
+# ── Editor noise ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*~
+*.swp
+
+# ── Secrets / personal data ────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pwd
+profiles.xml
+.env
+.env.*
+
+# ── Logs ───────────────────────────────────────────────────────────
+*.log

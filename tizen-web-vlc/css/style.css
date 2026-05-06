@@ -1,0 +1,494 @@
+/* ────────────────────────────────────────────────────────────────────────
+   VLC TV — visual language matching the bundled icon:
+     · deep navy background (same as icon canvas)
+     · white text as primary read colour
+     · sky-blue (#4fc3f7) used as accent — focus rings, brand wordmark,
+       progress fill, primary buttons.  Never as large background surfaces.
+     · everything centred horizontally on a 1920×1080 TV viewed from 3 m
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+    /* Slate-blue palette — same blue family as the icon but lifted out of
+     * pure-navy darkness so text reads comfortably on a TV at 3 m. */
+    --bg:        #1e2a3d;       /* base background, comfortable charcoal-blue */
+    --bg-2:      #283549;       /* subtle elevation step */
+    --bg-3:      #324159;       /* second elevation step */
+    --bg-card:   #2a3854;       /* tile/card surface */
+    --bg-card-h: #3a4a6a;       /* hovered/focused card */
+
+    --fg:        #ffffff;
+    --fg-mute:   #d0dae5;       /* lighter secondary text — easier reading */
+    --fg-dim:    #8da0b8;
+
+    --accent:    #4fc3f7;       /* sky blue from the icon */
+    --accent-2:  #81d4fa;
+    --accent-soft: rgba(79,195,247,.18);
+    --danger:    #ff6b6b;
+
+    --border:    rgba(255,255,255,.08);
+    --shadow:    0 8px 32px rgba(0,0,0,.45);
+    --r:         16px;
+    --r-sm:      10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 26px;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; }
+button:focus { outline: none; }
+
+.hidden { display: none !important; }
+
+/* ── Views: full screen, vertically + horizontally centred contents ──── */
+.view {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    padding: 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+/* ── Brand (logo + wordmark) ──────────────────────────────────────── */
+.brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 80px;
+}
+.brand.small { margin-bottom: 48px; }
+
+.brand h1 {
+    margin: 0 0 0 24px;       /* was flex `gap`, swapped for margin for WebKit 537 */
+    font-size: 64px;
+    font-weight: 200;
+    letter-spacing: 2px;
+    color: var(--fg);
+}
+.brand.small h1 { font-size: 40px; }
+
+.brand h1 span {
+    color: var(--accent);
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+/* Brand mark — uses the actual app icon so it always matches the launcher */
+.cone-img {
+    width: 96px; height: 96px;
+    border-radius: 18px;
+    flex-shrink: 0;
+}
+.brand.small .cone-img { width: 56px; height: 56px; border-radius: 12px; }
+
+/* ── Home tiles ───────────────────────────────────────────────────── */
+.home-tiles {
+    display: grid; gap: 36px;
+    grid-template-columns: repeat(3, 320px);
+    justify-content: center;
+}
+
+.tile {
+    background: var(--bg-card);
+    border: 3px solid var(--border);
+    border-radius: var(--r);
+    padding: 56px 40px;
+    text-align: center;
+    transition: transform .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
+    color: var(--fg);
+}
+
+.tile:focus, .tile.focused {
+    border-color: var(--accent);
+    background: var(--bg-card-h);
+    transform: scale(1.05) translateY(-4px);
+    box-shadow: var(--shadow), 0 0 0 6px var(--accent-soft);
+}
+
+.tile-icon {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--fg);
+    background: var(--accent-soft);
+    border: 2px solid var(--accent);
+    width: 96px; height: 96px;
+    line-height: 92px;
+    border-radius: 24px;
+    margin: 0 auto 28px;
+    letter-spacing: 1px;
+}
+.tile:focus .tile-icon, .tile.focused .tile-icon {
+    background: var(--accent);
+    color: #102035;
+}
+
+.tile-label {
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--fg);
+    margin-bottom: 10px;
+}
+.tile-sub {
+    font-size: 18px;
+    color: var(--fg-mute);
+    line-height: 1.4;
+}
+
+/* ── URL input view ───────────────────────────────────────────────── */
+.url-input-wrap {
+    width: 100%;
+    max-width: 1080px;
+    text-align: center;
+}
+.url-input-wrap label {
+    display: block;
+    font-size: 18px;
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 16px;
+}
+#url-input {
+    width: 100%;
+    background: var(--bg-card);
+    color: var(--fg);
+    font: inherit;
+    font-size: 26px;
+    border: 3px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 22px 28px;
+    text-align: center;
+    transition: border-color .15s ease, background .15s ease;
+}
+#url-input::placeholder { color: var(--fg-dim); }
+#url-input:focus, #url-input.focused {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--bg-card-h);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+}
+
+.presets {
+    margin-top: 32px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+.preset {
+    background: var(--bg-card);
+    border: 2px solid var(--border);
+    border-radius: 999px;
+    padding: 12px 28px;
+    font-size: 18px;
+    color: var(--fg-mute);
+    margin: 7px;     /* spacing instead of flex gap */
+    transition: border-color .15s, color .15s, background .15s;
+}
+.preset:focus, .preset.focused {
+    border-color: var(--accent);
+    color: var(--fg);
+    background: var(--bg-card-h);
+}
+
+.actions {
+    display: flex;
+    margin-top: 48px;
+    justify-content: center;
+}
+.actions > .btn + .btn { margin-left: 24px; }
+
+.btn {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    padding: 18px 56px;
+    font-size: 22px;
+    font-weight: 500;
+    transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease;
+}
+.btn.primary {
+    background: var(--accent);
+    color: #102035;
+    font-weight: 600;
+}
+.btn.primary:focus, .btn.primary.focused {
+    background: var(--accent-2);
+    transform: scale(1.04);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+}
+.btn.ghost {
+    background: var(--bg-card);
+    color: var(--fg);
+    border-color: var(--border);
+}
+.btn.ghost:focus, .btn.ghost.focused {
+    border-color: var(--accent);
+    background: var(--bg-card-h);
+    transform: scale(1.04);
+}
+
+/* ── File browser ─────────────────────────────────────────────────── */
+#view-browse {
+    /* Browser needs the full width for the list; centre the container only */
+    justify-content: flex-start;
+}
+.browse-path {
+    color: var(--fg-mute);
+    font-size: 20px;
+    margin-bottom: 16px;
+    word-break: break-all;
+    width: 100%;
+    max-width: 1400px;
+    text-align: left;
+}
+.browse-list {
+    flex: 1;
+    width: 100%;
+    max-width: 1400px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border-radius: var(--r);
+    border: 1px solid var(--border);
+    text-align: left;
+}
+.browse-list li {
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    transition: background .12s ease, border-left .12s ease;
+    color: var(--fg);
+    font-size: 22px;
+}
+.browse-list li > * + * { margin-left: 24px; }
+.browse-list li:last-child { border-bottom: 0; }
+.browse-list li.focused {
+    background: var(--accent-soft);
+    border-left: 6px solid var(--accent);
+    padding-left: 26px;
+}
+.browse-list .icon {
+    width: 36px; flex: 0 0 36px;
+    text-align: center;
+    font-size: 22px;
+    color: var(--accent);
+}
+.browse-list .name { flex: 1; }
+.browse-list .meta {
+    color: var(--fg-mute);
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+/* ── Player ───────────────────────────────────────────────────────── */
+#player-object {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    width: 100%; height: 100%;
+    background: #000;
+}
+
+#view-player {
+    padding: 0;
+    pointer-events: none;
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+.osd {
+    position: absolute; left: 0; right: 0;
+    color: var(--fg);
+    pointer-events: auto;
+    transition: opacity .25s ease;
+}
+.osd-top {
+    top: 0;
+    padding: 32px 60px 100px;
+    background: linear-gradient(180deg, rgba(0,0,0,.85), rgba(0,0,0,0));
+    text-align: left;
+}
+.osd-bottom {
+    bottom: 0;
+    padding: 100px 60px 48px;
+    background: linear-gradient(0deg, rgba(0,0,0,.92), rgba(0,0,0,0));
+}
+
+#osd-title {
+    font-size: 28px;
+    font-weight: 500;
+}
+
+.time {
+    display: flex;
+    align-items: center;
+    margin-bottom: 32px;
+    font-variant-numeric: tabular-nums;
+    font-size: 22px;
+    color: var(--fg);
+}
+.time > * + * { margin-left: 24px; }
+.progress-track {
+    flex: 1;
+    height: 6px;
+    background: rgba(255,255,255,.18);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%; width: 0%;
+    background: var(--accent);
+    transition: width .25s linear;
+}
+
+.controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.controls > .ctrl + .ctrl { margin-left: 20px; }
+.ctrl {
+    background: rgba(255,255,255,.08);
+    border: 3px solid transparent;
+    border-radius: 50%;
+    width: 64px; height: 64px;
+    font-size: 24px;
+    color: var(--fg);
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color .15s ease, background .15s ease, transform .15s;
+}
+.ctrl.big {
+    width: 96px; height: 96px;
+    font-size: 36px;
+    background: var(--accent);
+    color: #102035;
+}
+.ctrl:focus, .ctrl.focused {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    transform: scale(1.06);
+}
+.ctrl.big:focus, .ctrl.big.focused {
+    background: var(--accent-2);
+    border-color: var(--accent-2);
+}
+
+/* ── Spinner ──────────────────────────────────────────────────────── */
+.spinner {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: auto;
+}
+.spinner-cone {
+    width: 80px; height: 80px;
+    border: 6px solid rgba(255,255,255,.15);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    margin: 0 auto 24px;
+    animation: spin 1s linear infinite;
+}
+.spinner-text { font-size: 24px; color: var(--fg-mute); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Error overlay ────────────────────────────────────────────────── */
+.error-overlay {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    background: rgba(0,0,0,.92);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 80px;
+    pointer-events: auto;
+    text-align: center;
+}
+.error-overlay > * + * { margin-top: 32px; }
+.error-msg {
+    font-size: 26px;
+    color: var(--danger);
+    max-width: 1100px;
+    line-height: 1.4;
+}
+
+/* ── Track menu ───────────────────────────────────────────────────── */
+.track-menu {
+    position: absolute; right: 60px; bottom: 240px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 32px;
+    min-width: 480px;
+    max-width: 600px;
+    box-shadow: var(--shadow);
+    pointer-events: auto;
+    text-align: left;
+}
+.track-menu h2 {
+    margin: 0 0 20px;
+    font-size: 24px;
+    font-weight: 500;
+}
+.track-section { margin-bottom: 24px; }
+.track-section h3 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.track-section ul { list-style: none; margin: 0; padding: 0; }
+.track-section li {
+    padding: 12px 18px;
+    border-radius: 8px;
+    transition: background .12s ease;
+    color: var(--fg);
+}
+.track-section li.focused { background: var(--accent-soft); }
+.track-section li.active::before {
+    content: '✓ ';
+    color: var(--accent);
+    font-weight: 700;
+}
+.track-section li.muted { color: var(--fg-dim); font-style: italic; }
+
+/* ── Hints / footer ───────────────────────────────────────────────── */
+.hint {
+    margin-top: 48px;
+    color: var(--fg-mute);
+    font-size: 18px;
+}
+.key {
+    display: inline-block;
+    background: var(--bg-3);
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+    color: var(--fg);
+    font-size: 16px;
+    margin: 0 4px;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────── */
+.toast {
+    position: fixed;
+    bottom: 60px; left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-3);
+    color: var(--fg);
+    padding: 16px 36px;
+    border-radius: 999px;
+    font-size: 20px;
+    box-shadow: var(--shadow);
+    z-index: 1000;
+    border: 1px solid var(--border);
+}

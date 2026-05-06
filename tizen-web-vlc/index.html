@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<title>VLC TV</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- AVPlay needs an OBJECT element of type "video/mp4" as its render target -->
+<object id="player-object" type="application/avplayer"></object>
+
+<!-- ── Home view ─────────────────────────────────────────────────────── -->
+<section id="view-home" class="view">
+    <header class="brand">
+        <img class="cone-img" src="icon.png" alt="">
+        <h1>VLC <span>TV</span></h1>
+    </header>
+
+    <nav class="home-tiles">
+        <button class="tile" data-action="open-url" data-focus>
+            <div class="tile-icon">URL</div>
+            <div class="tile-label">Open Network Stream</div>
+            <div class="tile-sub">HTTP · HLS · DASH · RTSP · RTMP</div>
+        </button>
+        <button class="tile" data-action="browse-usb">
+            <div class="tile-icon">USB</div>
+            <div class="tile-label">Browse USB Drive</div>
+            <div class="tile-sub">Local files on connected storage</div>
+        </button>
+        <button class="tile" data-action="browse-recent">
+            <div class="tile-icon">★</div>
+            <div class="tile-label">Recently Played</div>
+            <div class="tile-sub">Quick access to past media</div>
+        </button>
+    </nav>
+
+    <footer class="hint">
+        <span class="key">↑↓←→</span> navigate
+        <span class="key">OK</span> select
+        <span class="key">RETURN</span> back
+    </footer>
+</section>
+
+<!-- ── URL input view ────────────────────────────────────────────────── -->
+<section id="view-url" class="view hidden">
+    <header class="brand small">
+        <img class="cone-img" src="icon.png" alt="">
+        <h1>Open Network Stream</h1>
+    </header>
+
+    <div class="url-input-wrap">
+        <label for="url-input">Stream URL or file path</label>
+        <input id="url-input" type="text" inputmode="url"
+               placeholder="rtsp://… · https://…/playlist.m3u8 · file:///opt/usr/media/…"
+               data-focus>
+        <div class="presets">
+            <button class="preset" data-url="http://vjs.zencdn.net/v/oceans.mp4">Oceans (MP4, short)</button>
+            <button class="preset" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">HLS test (Mux)</button>
+            <button class="preset" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny (MP4)</button>
+            <button class="preset" data-url="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8">Apple BipBop (HLS, 16:9)</button>
+            <button class="preset" data-url="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH test (Akamai)</button>
+            <button class="preset" data-url="rtsp://170.93.143.139:554/rtplive/470011e600ef003a004ee33696235daa">FAA RTSP (public)</button>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="btn primary" data-action="open-current-url">Play</button>
+        <button class="btn ghost"   data-action="back-home">Cancel</button>
+    </div>
+</section>
+
+<!-- ── File browser view ─────────────────────────────────────────────── -->
+<section id="view-browse" class="view hidden">
+    <header class="brand small">
+        <img class="cone-img" src="icon.png" alt="">
+        <h1 id="browse-title">USB Drive</h1>
+    </header>
+
+    <div class="browse-path"  id="browse-path">/</div>
+    <ul    class="browse-list" id="browse-list"></ul>
+
+    <footer class="hint">
+        <span class="key">OK</span> open
+        <span class="key">RETURN</span> up
+        <span class="key">PLAY</span> open as media
+    </footer>
+</section>
+
+<!-- ── Player view ───────────────────────────────────────────────────── -->
+<section id="view-player" class="view hidden">
+    <!-- Top bar: title -->
+    <div class="osd osd-top hidden" id="osd-top">
+        <span id="osd-title">Loading…</span>
+    </div>
+
+    <!-- Center spinner while opening -->
+    <div class="spinner hidden" id="spinner">
+        <div class="spinner-cone"></div>
+        <div class="spinner-text">Opening stream…</div>
+    </div>
+
+    <!-- Center error banner -->
+    <div class="error-overlay hidden" id="error-overlay">
+        <div class="error-msg" id="error-msg"></div>
+        <button class="btn primary" data-action="back-home">Back to Home</button>
+    </div>
+
+    <!-- Bottom OSD: progress + controls -->
+    <div class="osd osd-bottom hidden" id="osd-bottom">
+        <div class="time">
+            <span id="time-current">00:00</span>
+            <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+            <span id="time-duration">00:00</span>
+        </div>
+        <div class="controls">
+            <button class="ctrl" data-action="seek-backward" data-focus>«</button>
+            <button class="ctrl" data-action="rewind">⏪</button>
+            <button class="ctrl big" data-action="play-pause" id="btn-playpause">▶</button>
+            <button class="ctrl" data-action="forward">⏩</button>
+            <button class="ctrl" data-action="seek-forward">»</button>
+            <button class="ctrl" data-action="stop">⏹</button>
+            <button class="ctrl" data-action="open-track-menu">CC/Audio</button>
+        </div>
+    </div>
+
+    <!-- Track selection overlay -->
+    <div class="track-menu hidden" id="track-menu">
+        <h2>Tracks</h2>
+        <div class="track-section">
+            <h3>Audio</h3>
+            <ul id="audio-tracks"></ul>
+        </div>
+        <div class="track-section">
+            <h3>Subtitle</h3>
+            <ul id="subtitle-tracks"></ul>
+        </div>
+        <button class="btn ghost" data-action="close-track-menu" data-focus>Close</button>
+    </div>
+</section>
+
+<!-- ── Toast / status flash ──────────────────────────────────────────── -->
+<div id="toast" class="toast hidden"></div>
+
+<script src="js/debug.js"></script>
+<script src="js/remote.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/browser.js"></script>
+<script src="js/player.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

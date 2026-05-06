@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns:tizen="http://tizen.org/ns/widgets"
+        xmlns="http://www.w3.org/ns/widgets"
+        id="http://madebypatrick.com/vlctv"
+        version="0.1.0"
+        viewmodes="maximized">
+    <tizen:application id="madebypatk.vlcweb"
+                       package="madebypatk"
+                       required_version="2.4"/>
+    <content src="index.html"/>
+    <icon src="icon.png"/>
+    <name>VLC TV</name>
+    <author>Patrick</author>
+    <description>VLC-style media player for Samsung Tizen TV — plays network streams, USB files, HLS, DASH and more via AVPlay.</description>
+
+    <tizen:profile name="tv-samsung"/>
+
+    <!-- Access any HTTP(S)/RTSP origin for streams + raw IP cameras. -->
+    <access origin="*" subdomains="true"/>
+
+    <tizen:setting screen-orientation="landscape"
+                   context-menu="disable"
+                   background-support="disable"
+                   encryption="disable"
+                   install-location="auto"
+                   hwkey-event="enable"/>
+
+    <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
+
+    <!-- Privileges — internet for streams, mediastorage/externalstorage for USB
+         file enumeration, download for future remote-file caching. -->
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/mediastorage"/>
+    <tizen:privilege name="http://tizen.org/privilege/externalstorage"/>
+    <tizen:privilege name="http://tizen.org/privilege/filesystem.read"/>
+    <tizen:privilege name="http://tizen.org/privilege/filesystem.write"/>
+    <tizen:privilege name="http://tizen.org/privilege/download"/>
+</widget>

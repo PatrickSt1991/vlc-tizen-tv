@@ -1,0 +1,154 @@
+name: Build VLC TV WGT
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tizen-web-vlc/**'
+      - '.github/workflows/build-wgt.yml'
+
+permissions:
+  contents: write
+
+env:
+  TIZEN_STUDIO_VER: 5.5
+  APP_ID:           madebypatk.vlcweb
+  PROFILE:          VLCTV
+  CERT_PASSWORD:    1234
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install required packages
+        run: sudo apt-get install -y expect
+
+      - name: Download Tizen Studio CLI
+        run: |
+          curl -sSLo tizen-installer \
+            "https://download.tizen.org/sdk/Installer/tizen-studio_${TIZEN_STUDIO_VER}/web-cli_Tizen_Studio_${TIZEN_STUDIO_VER}_ubuntu-64.bin"
+
+      - name: Install Tizen Studio
+        run: |
+          chmod +x tizen-installer
+          ./tizen-installer --accept-license "${GITHUB_WORKSPACE}/tizen-studio"
+          rm tizen-installer
+
+      - name: Create author certificate + security profile
+        run: |
+          TIZEN="${GITHUB_WORKSPACE}/tizen-studio/tools/ide/bin/tizen"
+          DATA_DIR="${GITHUB_WORKSPACE}/tizen-studio-data"
+
+          $TIZEN certificate \
+              -a VLCTV -p ${CERT_PASSWORD} \
+              -c US -s California -ct SanFrancisco \
+              -o VLCTV -n VLCTV-Author \
+              -e dev@example.org \
+              -f vlctvAuthor
+
+          $TIZEN security-profiles add \
+              -n ${PROFILE} \
+              -a "${DATA_DIR}/keystore/author/vlctvAuthor.p12" \
+              -p ${CERT_PASSWORD}
+
+          $TIZEN cli-config "profiles.path=${DATA_DIR}/profile/profiles.xml"
+
+      - name: Patch profiles.xml with passwords
+        # The CLI leaves passwords blank or pointed at .pwd files that don't
+        # exist on the runner — substitute literal passwords so signing works
+        # non-interactively.
+        run: |
+          DATA_DIR="${GITHUB_WORKSPACE}/tizen-studio-data"
+          PROFILES="${DATA_DIR}/profile/profiles.xml"
+
+          sed -i "s|${DATA_DIR}/keystore/author/vlctvAuthor.pwd|${CERT_PASSWORD}|g" "$PROFILES"
+          sed -i "s|${DATA_DIR}/tools/certificate-generator/certificates/distributor/tizen-distributor-signer.pwd|tizenpkcs12passfordsigner|g" "$PROFILES"
+          sed -i 's|password=""|password="tizenpkcs12passfordsigner"|g' "$PROFILES"
+
+      - name: Validate web app source
+        run: |
+          TIZEN="${GITHUB_WORKSPACE}/tizen-studio/tools/ide/bin/tizen"
+          cd tizen-web-vlc
+          # build-web prepares .buildResult/ with the bundle to sign
+          $TIZEN build-web -- "$PWD"
+
+      - name: Sign + package WGT (non-interactive via expect)
+        run: |
+          cat > package.exp << 'EOF'
+          #!/usr/bin/expect -f
+          set timeout 300
+          spawn $env(GITHUB_WORKSPACE)/tizen-studio/tools/ide/bin/tizen package -t wgt -s $env(PROFILE) -- $env(GITHUB_WORKSPACE)/tizen-web-vlc/.buildResult
+          expect {
+            "Author password:"        { send "$env(CERT_PASSWORD)\r"; exp_continue }
+            "Save author password"    { send "n\r"; exp_continue }
+            "Distributor1 password:"  { send "tizenpkcs12passfordsigner\r"; exp_continue }
+            "Save distributor1 password" { send "n\r"; exp_continue }
+            eof
+          }
+          EOF
+          chmod +x package.exp
+          ./package.exp
+
+          # Move the signed wgt out of the build result
+          mkdir -p release
+          mv tizen-web-vlc/.buildResult/*.wgt release/vlctv.wgt
+          ls -lh release/
+
+      - name: Compute version + date tags
+        id: meta
+        run: |
+          VERSION=$(grep -oE 'version="[0-9.]+"' tizen-web-vlc/config.xml | head -1 | cut -d'"' -f2)
+          DATE_TAG=$(date +'%Y%m%d-%H%M')
+          DATE_PRETTY=$(date +'%Y-%m-%d %H:%M UTC')
+          {
+            echo "version=$VERSION"
+            echo "date_tag=$DATE_TAG"
+            echo "date_pretty=$DATE_PRETTY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact (per-run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlctv-${{ steps.meta.outputs.date_tag }}
+          path: release/vlctv.wgt
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: 'v${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.date_tag }}'
+          name:    'VLC TV v${{ steps.meta.outputs.version }} — ${{ steps.meta.outputs.date_pretty }}'
+          files:   release/*.wgt
+          body: |
+            # VLC TV — Tizen Web App
+
+            Built ${{ steps.meta.outputs.date_pretty }} by GitHub Actions.
+
+            ## Install
+
+            1. Enable Developer Mode on your TV (`Apps → 1 2 3 4 5 → Developer Mode = ON`,
+               set Host PC IP to your machine).
+            2. **Re-sign with your own Samsung distributor cert** — the WGT is
+               signed with a generic CI-generated cert, which won't match your
+               TV's DUID.  Use Tizen Studio's *Certificate Manager* to
+               regenerate, or run:
+
+               ```bash
+               tizen package -t wgt -s YourProfile -- /path/to/vlctv.wgt
+               ```
+
+            3. Install:
+
+               ```bash
+               sdb connect <tv-ip>
+               sdb install vlctv.wgt
+               ```
+
+            ## Whats in this build
+            - All sources at the matching commit
+            - Output: `vlctv.wgt`
+          draft:      false
+          prerelease: false
