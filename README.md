@@ -42,6 +42,14 @@ files are published there by the build workflow.
 
 ### 2. Install the `.wgt`
 
+#### Install with Jellyfin2Samsung
+
+Download the latest version from [Jellyfin2Samsung](https://github.com/Jellyfin2Samsung/Samsung-Jellyfin-Installer/releases/latest) choose Tizen Community as release and choose vlc-tizen-tv.
+
+Launch **VLC TV** from your TV's app list.
+
+#### Install the `.wgt` with Tizen Studio
+
 Download the latest `vlctv.wgt` from Releases. Then sign with your Samsung
 distributor cert (the workflow ships a generic cert, but Samsung TVs require
 the `.wgt` to be signed by *your* cert tied to your TV's DUID — Tizen Studio's
