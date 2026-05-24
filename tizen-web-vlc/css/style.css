@@ -315,6 +315,13 @@ button:focus { outline: none; }
     background: transparent;  /* let video plane show; body underneath is black */
 }
 
+#html5-video {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    width: 100%; height: 100%;
+    background: #000;
+    display: none;  /* shown only when playing a local file */
+}
+
 #view-player {
     padding: 0;
     pointer-events: none;

@@ -11,6 +11,12 @@
 <!-- AVPlay needs an OBJECT element of type "video/mp4" as its render target -->
 <object id="player-object" type="application/avplayer"></object>
 
+<!-- HTML5 video — used for local file:// URLs because AVPlay's local-file
+     pipeline is broken on Samsung TV 5.0 (opens the file, reports PLAYING,
+     never decodes a frame).  The WebView's chromium media stack handles
+     file:// just fine. -->
+<video id="html5-video" playsinline></video>
+
 <!-- ── Home view ─────────────────────────────────────────────────────── -->
 <section id="view-home" class="view">
     <header class="brand">

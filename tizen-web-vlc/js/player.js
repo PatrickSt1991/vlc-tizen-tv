@@ -1,15 +1,31 @@
-/* AVPlay wrapper.
+/* Player wrapper — auto-selects backend based on URL scheme.
  *
- * Samsung's webapis.avplay.* is the API every TV media app uses.  It supports
- * H.264, HEVC, VP9, AAC, MP3, AC3, HLS, MPEG-DASH, RTSP, smooth-streaming,
- * subtitles (CEA/SMI/SRT) and DRM.  Way more than HTML5 <video> alone.
+ *   file:// or /opt/... (local files) → HTML5 <video>
+ *      AVPlay's local-file pipeline is broken on Samsung TV 5.0 (it opens,
+ *      reports PLAYING, but never decodes).  The WebView's chromium media
+ *      stack handles file:// fine and shares the same hardware decoders.
  *
- * The render target is the #player-object element — must exist in the DOM
- * before `open()` is called.  Display rect must be set to the area we want
- * the video to fill (usually the whole screen). */
+ *   http / https / rtsp / rtmp / .m3u8 / .mpd → Samsung AVPlay
+ *      Hardware-accelerated, supports HLS, DASH, RTSP, etc.  Proven on
+ *      this firmware.
+ */
 
 var Player = (function () {
-    var avplay = null;
+
+    /* ── Backend dispatch ──────────────────────────────────────────────── */
+    var BACKEND_NONE   = 'none';
+    var BACKEND_AVPLAY = 'avplay';
+    var BACKEND_HTML5  = 'html5';
+    var backend = BACKEND_NONE;
+
+    function isLocalUrl(url) {
+        return /^file:\/\//.test(url) || /^\//.test(url);
+    }
+    function pickBackend(url) {
+        return isLocalUrl(url) ? BACKEND_HTML5 : BACKEND_AVPLAY;
+    }
+
+    /* ── Listener fanout ───────────────────────────────────────────────── */
     var listeners = {
         onstatechange: null,
         onerror:       null,
@@ -17,84 +33,147 @@ var Player = (function () {
         onprogress:    null,
         oncomplete:    null
     };
-    var pollTimer = null;
+    function setListener(name, fn) { if (name in listeners) listeners[name] = fn; }
+    function emit(name) {
+        if (listeners[name]) listeners[name].apply(null, [].slice.call(arguments, 1));
+    }
 
-    function api() {
+    /* ── AVPlay backend ────────────────────────────────────────────────── */
+    var avplay = null;
+    function av() {
         if (avplay) return avplay;
         if (typeof webapis !== 'undefined' && webapis.avplay) avplay = webapis.avplay;
         return avplay;
     }
 
-    function setDisplayRect() {
+    function avSetDisplayRect() {
         try {
-            // On TV the chrome's window.innerWidth is sometimes 0 before first
-            // layout — fall back to the screen dimensions (always 1920x1080 on
-            // a 1080p TV, 3840x2160 on 4K).  Then go again with 1920x1080 as
-            // last resort because some firmwares don't expose screen.* either.
             var w = window.innerWidth  || screen.width  || 1920;
             var h = window.innerHeight || screen.height || 1080;
-            api().setDisplayRect(0, 0, w, h);
-            if (typeof Debug !== 'undefined') Debug.player('setDisplayRect ' + w + 'x' + h);
+            av().setDisplayRect(0, 0, w, h);
+            if (typeof Debug !== 'undefined') Debug.player('AV setDisplayRect ' + w + 'x' + h);
         } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.warn('setDisplayRect: ' + e.message);
+            if (typeof Debug !== 'undefined') Debug.warn('AV setDisplayRect: ' + e.message);
         }
     }
-
-    function setDisplayMethod() {
+    function avSetDisplayMethod() {
         try {
-            // Letterbox preserves aspect ratio; full-screen would stretch.
-            api().setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX');
-            if (typeof Debug !== 'undefined') Debug.player('setDisplayMethod LETTER_BOX');
+            av().setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX');
         } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.warn('setDisplayMethod: ' + e.message);
+            if (typeof Debug !== 'undefined') Debug.warn('AV setDisplayMethod: ' + e.message);
         }
     }
 
-    function setListener(name, fn) {
-        if (name in listeners) listeners[name] = fn;
-    }
-
-    function emit(name) {
-        if (listeners[name]) listeners[name].apply(null, [].slice.call(arguments, 1));
-    }
-
-    /* AVPlay state polling — `getState()` is reliable, `setListener()` events
-     * are sometimes flaky on older firmware so we poll position/duration too.
-     * Also surface a debug log every 5 s so we can tell from the listener
-     * whether the playhead is actually advancing (catches the "AVPlay reports
-     * PLAYING but is silently stuck on an unsupported codec" case). */
-    var lastDebugLogTime = 0;
-    var lastDebugLogPos  = 0;
-    function startPolling() {
-        stopPolling();
-        lastDebugLogTime = 0;
-        lastDebugLogPos  = 0;
-        pollTimer = setInterval(function () {
+    var avPollTimer = null;
+    var avLastDebugT = 0, avLastDebugPos = 0;
+    function avStartPolling() {
+        avStopPolling();
+        avLastDebugT = 0; avLastDebugPos = 0;
+        avPollTimer = setInterval(function () {
             try {
-                var state = api().getState();
-                var time  = api().getCurrentTime();
-                var dur   = api().getDuration();
-                emit('onprogress', { state: state, time: time, duration: dur });
-
+                var s = av().getState();
+                var t = av().getCurrentTime();
+                var d = av().getDuration();
+                emit('onprogress', { state: s, time: t, duration: d });
                 var now = Date.now();
-                if (typeof Debug !== 'undefined' && now - lastDebugLogTime > 5000) {
-                    var stuckHint = (state === 'PLAYING' && time === lastDebugLogPos)
-                        ? ' (NOT ADVANCING — likely unsupported codec)' : '';
-                    Debug.player('progress state=' + state +
-                                 ' time=' + time + 'ms dur=' + dur + 'ms' + stuckHint);
-                    lastDebugLogTime = now;
-                    lastDebugLogPos  = time;
+                if (typeof Debug !== 'undefined' && now - avLastDebugT > 5000) {
+                    var stuck = (s === 'PLAYING' && t === avLastDebugPos) ?
+                        ' (NOT ADVANCING — unsupported codec)' : '';
+                    Debug.player('AV progress state=' + s + ' time=' + t + 'ms dur=' + d + 'ms' + stuck);
+                    avLastDebugT = now; avLastDebugPos = t;
                 }
             } catch (e) {}
         }, 500);
     }
-    function stopPolling() {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    function avStopPolling() {
+        if (avPollTimer) { clearInterval(avPollTimer); avPollTimer = null; }
     }
 
-    /* Sniff stream type from URL — AVPlay does its own detection but explicit
-     * hints via setStreamingProperty(ADAPTIVE_INFO / COOKIE / USER_AGENT) make
-     * RTSP/HLS/DASH more reliable, especially on older firmware. */
+    function avOpen(url) {
+        if (!av()) { emit('onerror', 'AVPlay API not available'); return; }
+        try { av().close(); } catch (e) {}
+        try {
+            av().open(url);
+            if (typeof Debug !== 'undefined') Debug.player('AV open() returned');
+        } catch (e) {
+            emit('onerror', 'AVPlay open(): ' + (e.message || e));
+            return;
+        }
+        try {
+            av().setListener({
+                onbufferingstart:    function () { emit('onbuffering', true); },
+                onbufferingcomplete: function () { emit('onbuffering', false); },
+                onstreamcompleted:   function () { emit('oncomplete'); },
+                onerror:             function (e) { emit('onerror', e); },
+                onerrormsg:          function (c, m) { emit('onerror', m || c); }
+            });
+        } catch (e) {}
+
+        try {
+            av().prepareAsync(
+                function () {
+                    avSetDisplayRect();
+                    avSetDisplayMethod();
+                    try { av().play(); } catch (e) {}
+                    avStartPolling();
+                    emit('onstatechange', 'playing');
+                },
+                function (err) { emit('onerror', 'prepare failed: ' + (err && err.message ? err.message : err)); }
+            );
+        } catch (e) {
+            try { av().prepare(); av().play(); avStartPolling(); emit('onstatechange', 'playing'); }
+            catch (e2) { emit('onerror', 'prepare failed: ' + (e2.message || e2)); }
+        }
+    }
+
+    /* ── HTML5 backend ────────────────────────────────────────────────── */
+    var h5 = null;
+    function h5el() {
+        if (!h5) h5 = document.getElementById('html5-video');
+        return h5;
+    }
+    function h5Open(url) {
+        var v = h5el();
+        v.style.display = 'block';
+        v.src = url;
+        v.onloadedmetadata = function () {
+            if (typeof Debug !== 'undefined') Debug.player('H5 metadata loaded; duration=' + v.duration + 's');
+        };
+        v.oncanplay = function () {
+            if (typeof Debug !== 'undefined') Debug.player('H5 canplay');
+            try { v.play(); } catch (e) {}
+        };
+        v.onplaying = function () {
+            if (typeof Debug !== 'undefined') Debug.player('H5 playing');
+            emit('onstatechange', 'playing');
+        };
+        v.onpause = function () {
+            if (typeof Debug !== 'undefined') Debug.player('H5 paused');
+            emit('onstatechange', 'paused');
+        };
+        v.onwaiting = function () { emit('onbuffering', true); };
+        v.onstalled = function () { emit('onbuffering', true); };
+        v.onplaying = function () { emit('onbuffering', false); emit('onstatechange', 'playing'); };
+        v.ontimeupdate = function () {
+            emit('onprogress', { state: 'PLAYING', time: (v.currentTime||0) * 1000, duration: (v.duration||0) * 1000 });
+        };
+        v.onended = function () {
+            if (typeof Debug !== 'undefined') Debug.player('H5 ended');
+            emit('oncomplete');
+        };
+        v.onerror = function () {
+            var err = v.error;
+            var code = err ? err.code : 0;
+            var msg = ({1:'aborted', 2:'network error', 3:'decode error', 4:'unsupported source'})[code] || ('code ' + code);
+            if (typeof Debug !== 'undefined') Debug.error('H5 error: ' + msg);
+            emit('onerror', 'HTML5 video: ' + msg);
+        };
+        v.load();
+    }
+
+    /* ── Public API ───────────────────────────────────────────────────── */
+
+    /* Sniff stream type from URL — informational, used to log + decide backend. */
     function sniffStreamType(url) {
         var lower = String(url).toLowerCase().split('?')[0];
         if (lower.indexOf('rtsp://') === 0)  return 'RTSP';
@@ -103,184 +182,125 @@ var Player = (function () {
         if (/\.m3u8?$/.test(lower))          return 'HLS';
         if (/\.mpd$/.test(lower))            return 'DASH';
         if (/\.ism\/?(?:Manifest)?$/.test(lower)) return 'SMOOTH';
+        if (isLocalUrl(url))                 return 'LOCAL';
         return 'PROGRESSIVE';
     }
 
     function open(url, opts) {
         opts = opts || {};
+        backend = pickBackend(url);
         var streamType = sniffStreamType(url);
-        if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ')');
-        if (!api()) {
-            if (typeof Debug !== 'undefined') Debug.error('AVPlay API not available');
-            emit('onerror', 'AVPlay API not available');
-            return;
-        }
+        if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ', backend=' + backend + ')');
 
-        // If something is currently playing, tear it down cleanly first.
-        try { api().close(); } catch (e) {}
-
-        try {
-            api().open(url);
-            if (typeof Debug !== 'undefined') Debug.player('AVPlay open() returned');
-        } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.error('AVPlay open() throw: ' + (e.message || e));
-            emit('onerror', 'open() failed: ' + (e.message || e));
-            return;
-        }
-
-        /* AVPlay's streaming-property keys vary across firmware versions; on
-         * Tizen 5.0 most of the ones we'd want either don't exist or have
-         * different names.  Skip them — defaults work fine. */
-
-        // Listener with both state and progress events.
-        try {
-            api().setListener({
-                onbufferingstart: function () {
-                    if (typeof Debug !== 'undefined') Debug.player('buffering start');
-                    emit('onbuffering', true);
-                },
-                onbufferingprogress: function (p) {},
-                onbufferingcomplete: function () {
-                    if (typeof Debug !== 'undefined') Debug.player('buffering complete');
-                    emit('onbuffering', false);
-                },
-                oncurrentplaytime: function (ms) {
-                    emit('onprogress', { time: ms, duration: safeDuration() });
-                },
-                onstreamcompleted: function () {
-                    if (typeof Debug !== 'undefined') Debug.player('stream completed');
-                    emit('oncomplete');
-                },
-                onerror: function (err) {
-                    if (typeof Debug !== 'undefined') Debug.error('AVPlay onerror: ' + JSON.stringify(err));
-                    emit('onerror', err);
-                },
-                onerrormsg: function (err, msg) {
-                    if (typeof Debug !== 'undefined') Debug.error('AVPlay onerrormsg: code=' + err + ' msg=' + msg);
-                    emit('onerror', msg || err);
-                },
-                onevent: function (name, data) {
-                    if (typeof Debug !== 'undefined') Debug.player('event ' + name + ': ' + JSON.stringify(data));
-                },
-                onsubtitlechange: function (durationMs, text, type, attr) {},
-                ondrmevent: function () {}
-            });
-        } catch (e) { /* listener setup is non-fatal */ }
-
-        setDisplayRect();
-
-        // Optional Samsung-specific advanced features
-        try {
-            api().setBufferingParam('PLAYER_BUFFER_FOR_PLAY', 'PLAYER_BUFFER_SIZE_IN_SECOND', 5);
-        } catch (e) {}
-
-        // prepareAsync is the modern path; falls back to prepare() if not present.
-        // CRITICAL: after prepare succeeds we must set the display rect + method
-        // AGAIN — AVPlay re-creates its surface internally and forgets prior
-        // calls.  Without this the player ends up rendering at 0×0 (no visible
-        // frame, no progress) even though state reports PLAYING.
-        function afterPrepareOK() {
-            setDisplayRect();
-            setDisplayMethod();
-            try {
-                api().play();
-                if (typeof Debug !== 'undefined') Debug.player('play() called');
-            } catch (e) {
-                if (typeof Debug !== 'undefined') Debug.error('play() after prepare: ' + e.message);
-            }
-            startPolling();
-            emit('onstatechange', 'playing');
-        }
-
-        try {
-            api().prepareAsync(
-                function () {
-                    if (typeof Debug !== 'undefined') Debug.player('prepareAsync OK');
-                    afterPrepareOK();
-                },
-                function (err) {
-                    if (typeof Debug !== 'undefined') Debug.error('prepareAsync failed: ' + JSON.stringify(err));
-                    emit('onerror', 'prepare failed: ' + (err && err.message ? err.message : err));
-                }
-            );
-        } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.warn('prepareAsync threw, falling back to prepare(): ' + e.message);
-            try {
-                api().prepare();
-                afterPrepareOK();
-            } catch (e2) {
-                if (typeof Debug !== 'undefined') Debug.error('prepare() also failed: ' + e2.message);
-                emit('onerror', 'prepare failed: ' + (e2.message || e2));
-            }
+        if (backend === BACKEND_HTML5) {
+            // Hide AVPlay's object so the HTML5 video element is the only thing rendering
+            var po = document.getElementById('player-object');
+            if (po) po.style.display = 'none';
+            h5Open(url);
+        } else {
+            var v = h5el();
+            if (v) v.style.display = 'none';
+            var po2 = document.getElementById('player-object');
+            if (po2) po2.style.display = 'block';
+            avOpen(url);
         }
     }
 
-    function safeDuration() {
-        try { return api().getDuration(); } catch (e) { return 0; }
+    function play() {
+        if (backend === BACKEND_HTML5) { try { h5el().play(); } catch (e) {} emit('onstatechange', 'playing'); }
+        else if (backend === BACKEND_AVPLAY) { try { av().play(); } catch (e) {} emit('onstatechange', 'playing'); }
     }
-    function safeTime() {
-        try { return api().getCurrentTime(); } catch (e) { return 0; }
+    function pause() {
+        if (backend === BACKEND_HTML5) { try { h5el().pause(); } catch (e) {} emit('onstatechange', 'paused'); }
+        else if (backend === BACKEND_AVPLAY) { try { av().pause(); } catch (e) {} emit('onstatechange', 'paused'); }
     }
-    function safeState() {
-        try { return api().getState(); } catch (e) { return 'NONE'; }
-    }
-
     function togglePause() {
-        var st = safeState();
-        if (st === 'PLAYING')      { api().pause();  emit('onstatechange', 'paused');  }
-        else if (st === 'PAUSED')  { api().play();   emit('onstatechange', 'playing'); }
-        else if (st === 'IDLE' || st === 'NONE') {} // nothing to toggle
+        var st = state();
+        if (st === 'PLAYING') pause();
+        else                  play();
     }
-
-    function play()  { try { api().play();  emit('onstatechange', 'playing'); } catch (e) {} }
-    function pause() { try { api().pause(); emit('onstatechange', 'paused');  } catch (e) {} }
-
     function stop() {
-        stopPolling();
-        try { api().stop();  } catch (e) {}
-        try { api().close(); } catch (e) {}
+        if (backend === BACKEND_HTML5) {
+            var v = h5el();
+            try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+            v.style.display = 'none';
+        } else if (backend === BACKEND_AVPLAY) {
+            avStopPolling();
+            try { av().stop();  } catch (e) {}
+            try { av().close(); } catch (e) {}
+        }
+        backend = BACKEND_NONE;
         emit('onstatechange', 'stopped');
     }
-
     function seekRel(deltaMs) {
-        try {
-            var t  = safeTime();
-            var dur = safeDuration();
-            var to = Math.max(0, Math.min(dur ? dur - 1000 : t + deltaMs, t + deltaMs));
-            api().seekTo(to);
-        } catch (e) {}
+        if (backend === BACKEND_HTML5) {
+            var v = h5el();
+            try {
+                var t = v.currentTime + (deltaMs / 1000);
+                v.currentTime = Math.max(0, Math.min(v.duration ? v.duration - 0.5 : t, t));
+            } catch (e) {}
+        } else if (backend === BACKEND_AVPLAY) {
+            try {
+                var ct = av().getCurrentTime();
+                var d  = av().getDuration();
+                var to = Math.max(0, Math.min(d ? d - 1000 : ct + deltaMs, ct + deltaMs));
+                av().seekTo(to);
+            } catch (e) {}
+        }
     }
-
     function seekTo(ms) {
-        try { api().seekTo(Math.max(0, ms)); } catch (e) {}
+        if (backend === BACKEND_HTML5) {
+            try { h5el().currentTime = Math.max(0, ms / 1000); } catch (e) {}
+        } else if (backend === BACKEND_AVPLAY) {
+            try { av().seekTo(Math.max(0, ms)); } catch (e) {}
+        }
+    }
+    function currentTime() {
+        if (backend === BACKEND_HTML5)    return (h5el().currentTime || 0) * 1000;
+        if (backend === BACKEND_AVPLAY)   { try { return av().getCurrentTime(); } catch (e) { return 0; } }
+        return 0;
+    }
+    function duration() {
+        if (backend === BACKEND_HTML5)    return (h5el().duration || 0) * 1000;
+        if (backend === BACKEND_AVPLAY)   { try { return av().getDuration(); } catch (e) { return 0; } }
+        return 0;
+    }
+    function state() {
+        if (backend === BACKEND_HTML5) {
+            var v = h5el();
+            if (v.paused)  return 'PAUSED';
+            if (v.ended)   return 'IDLE';
+            return v.readyState >= 3 ? 'PLAYING' : 'READY';
+        }
+        if (backend === BACKEND_AVPLAY) { try { return av().getState(); } catch (e) { return 'NONE'; } }
+        return 'NONE';
+    }
+    function setDisplayRect() {
+        if (backend === BACKEND_AVPLAY) avSetDisplayRect();
     }
 
-    /* Track enumeration for audio + subtitle pickers. */
+    /* Track info — only meaningful on AVPlay.  HTML5 video tracks API exists
+     * but works very differently and isn't useful for our purposes. */
     function getTracks() {
         var out = { audio: [], subtitle: [] };
+        if (backend !== BACKEND_AVPLAY) return out;
         try {
-            var info = api().getTotalTrackInfo();
+            var info = av().getTotalTrackInfo();
             for (var i = 0; i < info.length; i++) {
                 var t = info[i];
-                var record = {
-                    index: t.index,
-                    type:  t.type,
-                    extra: t.extra_info
-                };
-                if (t.type === 'AUDIO')        out.audio.push(record);
-                else if (t.type === 'TEXT')    out.subtitle.push(record);
-                else if (t.type === 'SUBTITLE') out.subtitle.push(record);
+                if (t.type === 'AUDIO') out.audio.push({ index: t.index, type: t.type, extra: t.extra_info });
+                else                    out.subtitle.push({ index: t.index, type: t.type, extra: t.extra_info });
             }
         } catch (e) {}
         return out;
     }
-
-    function setAudioTrack(index)   {
-        try { api().setSelectTrack('AUDIO', index); } catch (e) {}
+    function setAudioTrack(i) {
+        if (backend === BACKEND_AVPLAY) { try { av().setSelectTrack('AUDIO', i); } catch (e) {} }
     }
-    function setSubtitleTrack(index) {
-        try { api().setSelectTrack('TEXT', index); } catch (e) {
-            try { api().setSelectTrack('SUBTITLE', index); } catch (e2) {}
+    function setSubtitleTrack(i) {
+        if (backend === BACKEND_AVPLAY) {
+            try { av().setSelectTrack('TEXT', i); }
+            catch (e) { try { av().setSelectTrack('SUBTITLE', i); } catch (e2) {} }
         }
     }
 
@@ -293,9 +313,9 @@ var Player = (function () {
         stop:               stop,
         seekRel:            seekRel,
         seekTo:             seekTo,
-        currentTime:        safeTime,
-        duration:           safeDuration,
-        state:              safeState,
+        currentTime:        currentTime,
+        duration:           duration,
+        state:              state,
         getTracks:          getTracks,
         setAudioTrack:      setAudioTrack,
         setSubtitleTrack:   setSubtitleTrack,
