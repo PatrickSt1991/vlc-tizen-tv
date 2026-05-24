@@ -155,11 +155,19 @@ var Browser = (function () {
     }
 
     /* Build the URI to hand to AVPlay for a local File.
-     * Use Tizen's own toURI() which returns the correct file:// URL for the
-     * mounted path — anything else risks SMACK label / path mismatches. */
+     *
+     * Samsung TVs mount USB drives at /opt/media/USBDriveXX (system view) but
+     * AVPlay (running with its own SMACK label) can only read the same files
+     * via /opt/usr/media/USBDriveXX (bind mount, app-visible view).  Translate
+     * /opt/media → /opt/usr/media on the way to AVPlay.  The web app keeps
+     * using /opt/media/... for everything else because that's what
+     * tizen.filesystem returned for browsing.
+     *
+     * Returns a file:// URL — Samsung samples use this consistently. */
     function avplayURI(f) {
-        if (typeof f.toURI === 'function') return f.toURI();
-        return 'file://' + (f.fullPath || '');
+        var p = f.fullPath || '';
+        var translated = p.replace(/^\/opt\/media\//, '/opt/usr/media/');
+        return 'file://' + translated;
     }
 
     /* Convert a fileSize to "1.2 GB" style. */
