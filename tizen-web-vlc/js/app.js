@@ -58,7 +58,7 @@
             if (typeof Debug !== 'undefined') Debug.player('state → ' + s);
             updatePlayPauseButton(s);
             if (s === 'playing') {
-                clearTimeout(openWatchdog);
+                clearInterval(openWatchdog);
                 hideSpinner();
                 showOSD(true);
                 scheduleOSDHide();
@@ -250,16 +250,37 @@
             Player.open(uri, { title: title });
         }, 50);
 
-        // Watchdog: if AVPlay never transitions to "playing" within 20 s, surface
-        // an error so the user isn't stuck on a forever-spinner.  Cleared by
-        // the onstatechange listener below.
-        clearTimeout(openWatchdog);
-        openWatchdog = setTimeout(function () {
-            if (Player.state() !== 'PLAYING' && Player.state() !== 'PAUSED') {
-                showError('Stuck loading after 20 s.  AVPlay state: ' + Player.state() +
+        // Watchdog: detect two failure modes —
+        //   1. AVPlay never reaches PLAYING within 20 s (stuck in IDLE/READY)
+        //   2. AVPlay reports PLAYING but currentTime stays at 0 for 10 s
+        //      (codec unsupported — most often HEVC Main10 on a TV that only
+        //      supports HEVC Main8).
+        clearInterval(openWatchdog);
+        var watchdogStart = Date.now();
+        openWatchdog = setInterval(function () {
+            var elapsed = Date.now() - watchdogStart;
+            var state   = Player.state();
+            var time    = Player.currentTime();
+
+            if (elapsed > 20000 && state !== 'PLAYING' && state !== 'PAUSED') {
+                clearInterval(openWatchdog);
+                showError('Stuck loading after 20 s.  AVPlay state: ' + state +
                           '.  The codec, container, or source may not be supported.');
+                return;
             }
-        }, 20000);
+            if (elapsed > 10000 && state === 'PLAYING' && (!time || time === 0)) {
+                clearInterval(openWatchdog);
+                showError('Playback stalled: AVPlay reports playing but the playhead ' +
+                          'isn\'t advancing.  This usually means the codec inside the ' +
+                          'file isn\'t supported by your TV (most often HEVC Main10 / ' +
+                          '10-bit colour on a TV that only handles HEVC Main8).');
+                return;
+            }
+            if (state === 'PLAYING' && time > 0) {
+                // We're actually progressing — disarm.
+                clearInterval(openWatchdog);
+            }
+        }, 1000);
 
         pushRecent({ uri: uri, title: title || uri });
         scheduleOSDHide();
@@ -302,7 +323,7 @@
         document.getElementById('osd-bottom').classList.add('hidden');
         document.getElementById('track-menu').classList.add('hidden');
         hideSpinner();
-        clearTimeout(openWatchdog);
+        clearInterval(openWatchdog);
 
         // Hint for opaque codec-not-supported errors
         var hint = '';

@@ -59,15 +59,32 @@ var Player = (function () {
     }
 
     /* AVPlay state polling — `getState()` is reliable, `setListener()` events
-     * are sometimes flaky on older firmware so we poll position/duration too. */
+     * are sometimes flaky on older firmware so we poll position/duration too.
+     * Also surface a debug log every 5 s so we can tell from the listener
+     * whether the playhead is actually advancing (catches the "AVPlay reports
+     * PLAYING but is silently stuck on an unsupported codec" case). */
+    var lastDebugLogTime = 0;
+    var lastDebugLogPos  = 0;
     function startPolling() {
         stopPolling();
+        lastDebugLogTime = 0;
+        lastDebugLogPos  = 0;
         pollTimer = setInterval(function () {
             try {
                 var state = api().getState();
                 var time  = api().getCurrentTime();
                 var dur   = api().getDuration();
                 emit('onprogress', { state: state, time: time, duration: dur });
+
+                var now = Date.now();
+                if (typeof Debug !== 'undefined' && now - lastDebugLogTime > 5000) {
+                    var stuckHint = (state === 'PLAYING' && time === lastDebugLogPos)
+                        ? ' (NOT ADVANCING — likely unsupported codec)' : '';
+                    Debug.player('progress state=' + state +
+                                 ' time=' + time + 'ms dur=' + dur + 'ms' + stuckHint);
+                    lastDebugLogTime = now;
+                    lastDebugLogPos  = time;
+                }
             } catch (e) {}
         }, 500);
     }
