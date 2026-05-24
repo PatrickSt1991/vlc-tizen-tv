@@ -329,9 +329,18 @@
 
         // Hint for opaque codec-not-supported errors
         var hint = '';
-        if (/unknown error|not supported|invalid|stuck loading/i.test(msg)) {
+        var uri = state.playingUri || '';
+        var isMkv = /\.mkv($|\?)/i.test(uri);
+
+        if (isMkv) {
+            hint = 'MKV containers aren\'t fully supported by this TV\'s WebView. ' +
+                   'Remux to MP4 (no quality loss, takes seconds): ' +
+                   'ffmpeg -i input.mkv -c copy output.mp4 ' +
+                   '— if the audio is FLAC/DTS, also re-encode it: ' +
+                   'ffmpeg -i input.mkv -c:v copy -c:a aac -b:a 192k output.mp4';
+        } else if (/unknown error|not supported|invalid|stuck loading|unsupported source/i.test(msg)) {
             hint = 'The file or stream may use a codec or container that this TV can\'t ' +
-                   'decode (HEVC 10-bit, AV1, DTS-HD MA, VP9 Profile 2, FLAC-in-MKV, etc.). ' +
+                   'decode (HEVC 10-bit, AV1, DTS-HD MA, VP9 Profile 2, etc.). ' +
                    'For local files, remux to MP4 with: ffmpeg -i input.ext -c copy output.mp4';
         } else if (/connection|network|timeout/i.test(msg)) {
             hint = 'The TV couldn\'t reach the source.  Check the URL, the server is up, ' +

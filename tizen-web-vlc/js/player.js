@@ -135,7 +135,32 @@ var Player = (function () {
     function h5Open(url) {
         var v = h5el();
         v.style.display = 'block';
-        v.src = url;
+
+        // Clear any previous <source> children and use the modern approach:
+        // an explicit <source> element with a MIME type hint.  Tizen's
+        // chromium 47-era WebView is conservative about format detection; the
+        // MIME hint can unlock formats it would otherwise reject from the
+        // extension alone (e.g. an .mkv whose contents are actually decodable
+        // when treated as video/webm).
+        while (v.firstChild) v.removeChild(v.firstChild);
+        var lower = String(url).toLowerCase().split('?')[0];
+        var sourceType = null;
+        if (/\.mkv$/.test(lower))      sourceType = 'video/webm';   // best-effort: try WebM demuxer on MKV
+        else if (/\.webm$/.test(lower)) sourceType = 'video/webm';
+        else if (/\.mp4$/.test(lower) || /\.m4v$/.test(lower)) sourceType = 'video/mp4';
+        else if (/\.mov$/.test(lower)) sourceType = 'video/mp4';
+        else if (/\.ogg$/.test(lower) || /\.ogv$/.test(lower)) sourceType = 'video/ogg';
+
+        if (sourceType) {
+            var source = document.createElement('source');
+            source.src = url;
+            source.type = sourceType;
+            v.appendChild(source);
+            if (typeof Debug !== 'undefined') Debug.player('H5 source url=' + url + ' type=' + sourceType);
+        } else {
+            v.src = url;
+        }
+
         v.onloadedmetadata = function () {
             if (typeof Debug !== 'undefined') Debug.player('H5 metadata loaded; duration=' + v.duration + 's');
         };
