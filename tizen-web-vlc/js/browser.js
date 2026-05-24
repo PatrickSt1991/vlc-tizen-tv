@@ -18,11 +18,18 @@ var Browser = (function () {
         // Playlists / streams
         'm3u','m3u8','mpd','pls'
     ];
-    function isMedia(name) {
+    var SUBTITLE_EXTS = ['vtt', 'srt'];
+
+    function ext(name) {
         var dot = name.lastIndexOf('.');
-        if (dot < 0) return false;
-        return MEDIA_EXTS.indexOf(name.slice(dot + 1).toLowerCase()) >= 0;
+        return dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
     }
+    function basename(name) {
+        var dot = name.lastIndexOf('.');
+        return dot < 0 ? name : name.slice(0, dot);
+    }
+    function isMedia(name)    { return MEDIA_EXTS.indexOf(ext(name)) >= 0; }
+    function isSubtitle(name) { return SUBTITLE_EXTS.indexOf(ext(name)) >= 0; }
 
     /* Static fallback list of known Tizen virtual root names — used only when
      * tizen.filesystem.listStorages() isn't available (very old firmware). */
@@ -120,7 +127,40 @@ var Browser = (function () {
             file.listFiles(
                 function (entries) {
                     if (typeof Debug !== 'undefined') Debug.browse('  ' + entries.length + ' entries');
+
+                    // Build a map of basename → list of sibling subtitle files
+                    // so each playable item knows its candidate subtitles.
+                    var subsByBase = {};
+                    entries.forEach(function (f) {
+                        if (!f.isDirectory && isSubtitle(f.name)) {
+                            var base = basename(f.name).toLowerCase();
+                            (subsByBase[base] = subsByBase[base] || []).push({
+                                name:     f.name,
+                                lang:     extractLangTag(f.name),
+                                ext:      ext(f.name),
+                                uri:      typeof f.toURI === 'function' ? f.toURI() : 'file://' + f.fullPath,
+                                fullPath: f.fullPath,
+                                file:     f
+                            });
+                        }
+                    });
+
                     var out = entries.map(function (f) {
+                        var subs = [];
+                        if (!f.isDirectory && isMedia(f.name)) {
+                            // Sibling subtitles: same basename (case-insensitive)
+                            var base = basename(f.name).toLowerCase();
+                            subs = subsByBase[base] || [];
+                            // Also include subtitles whose basename starts with
+                            // the video's basename (e.g. movie.en.srt next to movie.mp4)
+                            Object.keys(subsByBase).forEach(function (k) {
+                                if (k !== base && k.indexOf(base + '.') === 0) {
+                                    subsByBase[k].forEach(function (s) {
+                                        if (subs.indexOf(s) < 0) subs.push(s);
+                                    });
+                                }
+                            });
+                        }
                         return {
                             name:     f.name,
                             isDir:    f.isDirectory,
@@ -129,7 +169,8 @@ var Browser = (function () {
                             mtime:    f.modified,
                             file:     f,
                             uri:      avplayURI(f),
-                            fullPath: f.fullPath
+                            fullPath: f.fullPath,
+                            subtitles: subs
                         };
                     });
                     out.sort(function (a, b) {
@@ -170,11 +211,48 @@ var Browser = (function () {
         return bytes.toFixed(bytes >= 10 || i === 0 ? 0 : 1) + ' ' + units[i];
     }
 
+    /* Extract a 2-3 letter ISO language code from a subtitle file's name,
+     * e.g. "movie.en.srt" → "en", "movie.eng.vtt" → "eng".  Returns '' if
+     * no language tag can be inferred. */
+    function extractLangTag(name) {
+        var b = basename(name);                  // "movie.en"
+        var parts = b.split('.');
+        if (parts.length < 2) return '';
+        var last = parts[parts.length - 1];
+        if (/^[a-z]{2,3}$/i.test(last)) return last.toLowerCase();
+        return '';
+    }
+
+    /* Read a subtitle file's content as UTF-8 text via tizen.filesystem. */
+    function readSubtitleText(subEntry, cb) {
+        if (!subEntry || !subEntry.file) { cb(new Error('no file')); return; }
+        try {
+            subEntry.file.openStream('r',
+                function (stream) {
+                    try {
+                        var text = stream.read(stream.bytesAvailable);
+                        stream.close();
+                        cb(null, text);
+                    } catch (e) {
+                        try { stream.close(); } catch (e2) {}
+                        cb(e);
+                    }
+                },
+                function (err) { cb(err); },
+                'UTF-8'
+            );
+        } catch (e) {
+            cb(e);
+        }
+    }
+
     return {
-        listRoots: listRoots,
-        listDir:   listDir,
-        parentOf:  parentOf,
-        isMedia:   isMedia,
-        humanSize: humanSize
+        listRoots:        listRoots,
+        listDir:          listDir,
+        parentOf:         parentOf,
+        isMedia:          isMedia,
+        isSubtitle:       isSubtitle,
+        humanSize:        humanSize,
+        readSubtitleText: readSubtitleText
     };
 })();

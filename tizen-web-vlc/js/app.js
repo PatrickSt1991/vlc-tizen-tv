@@ -187,14 +187,18 @@
                 var li = document.createElement('li');
                 li.dataset.uri = e.uri || '';
                 li.dataset.dir = e.isDir ? '1' : '0';
+                var subBadge = (e.subtitles && e.subtitles.length)
+                    ? '<span class="meta">CC ×' + e.subtitles.length + '</span>'
+                    : '';
                 li.innerHTML =
                     '<span class="icon">' + (e.isDir ? '📁' : '🎬') + '</span>' +
                     '<span class="name">' + escapeHtml(e.name) + '</span>' +
+                    subBadge +
                     (e.isDir ? '' :
                         '<span class="meta">' + Browser.humanSize(e.size) + '</span>');
                 li.addEventListener('click', function () {
                     if (e.isDir) listInto(e.file);
-                    else playUri(e.uri, e.name);
+                    else playUri(e.uri, e.name, { subtitles: e.subtitles });
                 });
                 ul.appendChild(li);
             });
@@ -231,7 +235,8 @@
 
     /* ── Common: open a URI in player view ────────────────────────── */
     var openWatchdog = null;
-    function playUri(uri, title) {
+    function playUri(uri, title, opts) {
+        opts = opts || {};
         if (typeof Debug !== 'undefined') Debug.player('playUri uri=' + uri + '  title=' + title);
         state.playingUri = uri;
         state.playingTitle = title || uri;
@@ -249,7 +254,10 @@
         // is in an idle state before open() and would error with INVALID_STATE.
         // The proper setDisplayRect happens after prepareAsync succeeds.
         setTimeout(function () {
-            Player.open(uri, { title: title });
+            Player.open(uri, {
+                title:     title,
+                subtitles: opts.subtitles || []
+            });
         }, 50);
 
         // Watchdog: detect two failure modes —
@@ -390,23 +398,41 @@
         var aUL = document.getElementById('audio-tracks');
         var sUL = document.getElementById('subtitle-tracks');
         aUL.innerHTML = ''; sUL.innerHTML = '';
-        if (!t.audio.length) aUL.innerHTML = '<li class="muted">No audio tracks</li>';
-        t.audio.forEach(function (tr) {
-            var li = document.createElement('li');
-            li.textContent = 'Audio #' + tr.index + ' — ' + (tr.extra || 'unnamed');
-            li.addEventListener('click', function () { Player.setAudioTrack(tr.index); UI.toast('Audio set'); });
-            aUL.appendChild(li);
-        });
-        if (!t.subtitle.length) sUL.innerHTML = '<li class="muted">No subtitle tracks</li>';
+
+        if (!t.audio.length) {
+            aUL.innerHTML = '<li class="muted">Only one audio track</li>';
+        } else {
+            t.audio.forEach(function (tr) {
+                var li = document.createElement('li');
+                li.textContent = tr.name;
+                if (tr.active) li.classList.add('active');
+                li.addEventListener('click', function () {
+                    Player.setAudioTrack(tr.index);
+                    UI.toast('Audio: ' + tr.name);
+                    closeTrackMenu();
+                });
+                aUL.appendChild(li);
+            });
+        }
+
+        // Subtitle list always has at least the "Off" entry from getTracks()
         t.subtitle.forEach(function (tr) {
             var li = document.createElement('li');
-            li.textContent = 'Subtitle #' + tr.index + ' — ' + (tr.extra || 'unnamed');
-            li.addEventListener('click', function () { Player.setSubtitleTrack(tr.index); UI.toast('Subtitle set'); });
+            li.textContent = tr.name;
+            if (tr.active) li.classList.add('active');
+            li.addEventListener('click', function () {
+                Player.setSubtitleTrack(tr.off ? -1 : tr.index);
+                UI.toast('Subtitle: ' + tr.name);
+                closeTrackMenu();
+            });
             sUL.appendChild(li);
         });
+
         document.getElementById('track-menu').classList.remove('hidden');
         UI.refreshFocusables();
-        var first = document.querySelector('#track-menu .focused, #track-menu li, #track-menu button');
+        // Prefer the currently-active entry as initial focus
+        var first = document.querySelector('#track-menu .active') ||
+                    document.querySelector('#track-menu li, #track-menu button');
         if (first) UI.focusOn(first);
     }
     function closeTrackMenu() {

@@ -133,9 +133,11 @@ var Player = (function () {
         return h5;
     }
     var h5OpenWatchdog = null;
-    function h5Open(url) {
+    var h5Subtitles = [];   // [{ name, lang, uri, file, ext }] passed in opts.subtitles
+    function h5Open(url, opts) {
         var v = h5el();
         v.style.display = 'block';
+        h5Subtitles = (opts && opts.subtitles) ? opts.subtitles.slice() : [];
 
         while (v.firstChild) v.removeChild(v.firstChild);
         var lower = String(url).toLowerCase().split('?')[0];
@@ -234,7 +236,7 @@ var Player = (function () {
             // Hide AVPlay's object so the HTML5 video element is the only thing rendering
             var po = document.getElementById('player-object');
             if (po) po.style.display = 'none';
-            h5Open(url);
+            h5Open(url, opts);
         } else {
             var v = h5el();
             if (v) v.style.display = 'none';
@@ -318,29 +320,182 @@ var Player = (function () {
         if (backend === BACKEND_AVPLAY) avSetDisplayRect();
     }
 
-    /* Track info — only meaningful on AVPlay.  HTML5 video tracks API exists
-     * but works very differently and isn't useful for our purposes. */
+    /* ── Track info ─────────────────────────────────────────────────────
+     *
+     * For AVPlay (HTTP streams): native enumeration via getTotalTrackInfo().
+     * For HTML5 (local files):
+     *   - audio:    video.audioTracks (when present — chromium 47 has it,
+     *               newer chromium dropped it; Tizen 5.0 is the right vintage).
+     *   - subtitle: the sibling subtitle files passed in opts.subtitles, plus
+     *               any embedded textTracks the video exposes. */
     function getTracks() {
-        var out = { audio: [], subtitle: [] };
-        if (backend !== BACKEND_AVPLAY) return out;
-        try {
-            var info = av().getTotalTrackInfo();
-            for (var i = 0; i < info.length; i++) {
-                var t = info[i];
-                if (t.type === 'AUDIO') out.audio.push({ index: t.index, type: t.type, extra: t.extra_info });
-                else                    out.subtitle.push({ index: t.index, type: t.type, extra: t.extra_info });
+        var out = { audio: [], subtitle: [{ index: -1, name: 'Off', off: true, active: false }] };
+
+        if (backend === BACKEND_AVPLAY) {
+            try {
+                var info = av().getTotalTrackInfo();
+                for (var i = 0; i < info.length; i++) {
+                    var t = info[i];
+                    if (t.type === 'AUDIO')
+                        out.audio.push({ index: t.index, name: t.extra_info || ('Audio ' + t.index), type: 'AVPLAY' });
+                    else
+                        out.subtitle.push({ index: t.index, name: t.extra_info || ('Subtitle ' + t.index), type: 'AVPLAY' });
+                }
+            } catch (e) {}
+            return out;
+        }
+
+        if (backend === BACKEND_HTML5) {
+            var v = h5el();
+
+            // Audio tracks — only on browsers that expose audioTracks
+            if (v.audioTracks && v.audioTracks.length) {
+                for (var j = 0; j < v.audioTracks.length; j++) {
+                    var at = v.audioTracks[j];
+                    out.audio.push({
+                        index:  j,
+                        name:   at.label || at.language || ('Audio ' + j),
+                        type:   'HTML5_AUDIO',
+                        active: !!at.enabled
+                    });
+                }
             }
-        } catch (e) {}
+
+            // External sibling subtitles
+            for (var k = 0; k < h5Subtitles.length; k++) {
+                var s = h5Subtitles[k];
+                out.subtitle.push({
+                    index:  k,
+                    name:   (s.lang ? '[' + s.lang.toUpperCase() + '] ' : '') + s.name,
+                    type:   'HTML5_EXTERNAL',
+                    active: false  // set when activated
+                });
+            }
+
+            // Currently-attached <track> elements — mark the active one
+            if (v.textTracks && v.textTracks.length) {
+                for (var t = 0; t < v.textTracks.length; t++) {
+                    if (v.textTracks[t].mode === 'showing' && out.subtitle[t + 1]) {
+                        out.subtitle[t + 1].active = true;
+                        out.subtitle[0].active = false;
+                    }
+                }
+                if (!out.subtitle.slice(1).some(function (x) { return x.active; })) {
+                    out.subtitle[0].active = true;
+                }
+            } else {
+                out.subtitle[0].active = true;
+            }
+        }
+
         return out;
     }
-    function setAudioTrack(i) {
-        if (backend === BACKEND_AVPLAY) { try { av().setSelectTrack('AUDIO', i); } catch (e) {} }
-    }
-    function setSubtitleTrack(i) {
+
+    function setAudioTrack(index) {
         if (backend === BACKEND_AVPLAY) {
-            try { av().setSelectTrack('TEXT', i); }
-            catch (e) { try { av().setSelectTrack('SUBTITLE', i); } catch (e2) {} }
+            try { av().setSelectTrack('AUDIO', index); } catch (e) {}
+        } else if (backend === BACKEND_HTML5) {
+            var v = h5el();
+            if (v.audioTracks) {
+                for (var i = 0; i < v.audioTracks.length; i++)
+                    v.audioTracks[i].enabled = (i === index);
+            }
         }
+    }
+
+    function setSubtitleTrack(index) {
+        if (backend === BACKEND_AVPLAY) {
+            try { av().setSelectTrack('TEXT', index); }
+            catch (e) { try { av().setSelectTrack('SUBTITLE', index); } catch (e2) {} }
+            return;
+        }
+        if (backend !== BACKEND_HTML5) return;
+
+        var v = h5el();
+        // "Off" — disable every existing textTrack
+        if (index < 0 || index === undefined) {
+            if (v.textTracks) for (var i = 0; i < v.textTracks.length; i++) v.textTracks[i].mode = 'disabled';
+            return;
+        }
+        var sub = h5Subtitles[index];
+        if (!sub) return;
+
+        // Disable any existing tracks then attach the requested one
+        if (v.textTracks) for (var j = 0; j < v.textTracks.length; j++) v.textTracks[j].mode = 'disabled';
+
+        // Load via Tizen filesystem, convert SRT→VTT if needed, attach as Blob URL <track>
+        if (sub._attached) {
+            sub._track.mode = 'showing';
+            return;
+        }
+        loadSubtitleAsVTT(sub, function (err, vttUrl) {
+            if (err) { if (typeof Debug !== 'undefined') Debug.error('subtitle load: ' + err.message); return; }
+            // Remove any previous track element
+            var existing = v.querySelectorAll('track');
+            for (var i = existing.length - 1; i >= 0; i--) v.removeChild(existing[i]);
+
+            var track = document.createElement('track');
+            track.kind    = 'subtitles';
+            track.label   = (sub.lang || 'subs').toUpperCase();
+            track.srclang = sub.lang || 'en';
+            track.src     = vttUrl;
+            track.default = true;
+            v.appendChild(track);
+
+            // Showing mode must be set after attachment
+            setTimeout(function () {
+                if (v.textTracks && v.textTracks.length) {
+                    v.textTracks[v.textTracks.length - 1].mode = 'showing';
+                }
+            }, 100);
+
+            sub._attached = true;
+            sub._track    = v.textTracks[v.textTracks.length - 1];
+        });
+    }
+
+    /* Convert a subtitle file (.vtt or .srt) to a VTT Blob URL the <track>
+     * element can load.  Tizen's filesystem reads the file as text, we convert
+     * SRT timing/numbering to VTT format and prepend the "WEBVTT" header. */
+    function loadSubtitleAsVTT(sub, cb) {
+        if (typeof Browser === 'undefined' || !Browser.readSubtitleText) {
+            cb(new Error('Browser.readSubtitleText not available'));
+            return;
+        }
+        Browser.readSubtitleText(sub, function (err, text) {
+            if (err) { cb(err); return; }
+            var vtt;
+            if (sub.ext === 'vtt') {
+                vtt = text;
+            } else if (sub.ext === 'srt') {
+                vtt = srtToVtt(text);
+            } else {
+                cb(new Error('unsupported subtitle ext: ' + sub.ext));
+                return;
+            }
+            try {
+                var blob = new Blob([vtt], { type: 'text/vtt' });
+                var url  = URL.createObjectURL(blob);
+                cb(null, url);
+            } catch (e) { cb(e); }
+        });
+    }
+
+    function srtToVtt(srt) {
+        // SRT: "00:00:01,234 --> 00:00:05,678"   VTT: "00:00:01.234 --> 00:00:05.678"
+        // SRT also numbers cues; VTT doesn't require numbering (the browser ignores it
+        // if there) but stripping is cleaner.
+        var lines = srt.replace(/\r/g, '').split('\n');
+        var out = ['WEBVTT', ''];
+        for (var i = 0; i < lines.length; i++) {
+            var l = lines[i];
+            // Skip pure-numeric cue index lines
+            if (/^\d+\s*$/.test(l)) continue;
+            // Convert timing
+            l = l.replace(/(\d\d:\d\d:\d\d),(\d{3})/g, '$1.$2');
+            out.push(l);
+        }
+        return out.join('\n');
     }
 
     return {
