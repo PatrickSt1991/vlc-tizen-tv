@@ -301,17 +301,21 @@
         document.getElementById('osd-bottom').classList.add('hidden');
         document.getElementById('track-menu').classList.add('hidden');
         hideSpinner();
+        clearTimeout(openWatchdog);
 
-        // Add a hint for the most common opaque error: codec-not-supported
+        // Hint for opaque codec-not-supported errors
         var hint = '';
-        if (/unknown error|not supported|invalid/i.test(msg)) {
-            hint = '\n\nThe file or stream may use a codec/container that this ' +
-                   'TV can\'t decode (e.g. HEVC 10-bit, AV1, DTS-HD MA, VP9 ' +
-                   'Profile 2).  Try a different file or transcode it to ' +
-                   'H.264 + AAC in MP4 first.';
+        if (/unknown error|not supported|invalid|stuck loading/i.test(msg)) {
+            hint = 'The file or stream may use a codec or container that this TV can\'t ' +
+                   'decode (HEVC 10-bit, AV1, DTS-HD MA, VP9 Profile 2, FLAC-in-MKV, etc.). ' +
+                   'For local files, remux to MP4 with: ffmpeg -i input.ext -c copy output.mp4';
+        } else if (/connection|network|timeout/i.test(msg)) {
+            hint = 'The TV couldn\'t reach the source.  Check the URL, the server is up, ' +
+                   'and your TV has network access.';
         }
 
-        document.getElementById('error-msg').textContent = msg + hint;
+        document.getElementById('error-title').textContent = msg;
+        document.getElementById('error-hint').textContent  = hint;
         document.getElementById('error-overlay').classList.remove('hidden');
 
         UI.refreshFocusables();

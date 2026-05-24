@@ -406,17 +406,43 @@ button:focus { outline: none; }
 /* ── Error overlay ────────────────────────────────────────────────── */
 .error-overlay {
     position: absolute; top: 0; right: 0; bottom: 0; left: 0;
-    background: rgba(0,0,0,.92);
+    background: rgba(10,20,35,.96);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     padding: 80px;
     pointer-events: auto;
     text-align: center;
     z-index: 100;  /* keep above OSDs so the "Back" button is clickable */
 }
-.error-overlay > * + * { margin-top: 32px; }
+.error-overlay > * + * { margin-top: 24px; }
+
+/* Big yellow warning icon for visibility, white message text for readability,
+ * muted secondary line for the codec hint.  Red on navy was too low contrast. */
+.error-icon {
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    border: 4px solid var(--accent);
+    color: var(--accent);
+    font-size: 56px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 1;
+}
+.error-title {
+    font-size: 36px;
+    font-weight: 500;
+    color: var(--fg);
+    max-width: 1200px;
+}
+.error-hint {
+    font-size: 20px;
+    color: var(--fg-mute);
+    max-width: 1000px;
+    line-height: 1.5;
+}
+/* Legacy — kept in case any pre-update DOM still references it */
 .error-msg {
     font-size: 26px;
-    color: var(--danger);
+    color: var(--fg);
     max-width: 1100px;
     line-height: 1.4;
 }

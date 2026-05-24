@@ -27,10 +27,27 @@ var Player = (function () {
 
     function setDisplayRect() {
         try {
-            api().setDisplayRect(0, 0,
-                window.innerWidth || screen.width,
-                window.innerHeight || screen.height);
-        } catch (e) {}
+            // On TV the chrome's window.innerWidth is sometimes 0 before first
+            // layout — fall back to the screen dimensions (always 1920x1080 on
+            // a 1080p TV, 3840x2160 on 4K).  Then go again with 1920x1080 as
+            // last resort because some firmwares don't expose screen.* either.
+            var w = window.innerWidth  || screen.width  || 1920;
+            var h = window.innerHeight || screen.height || 1080;
+            api().setDisplayRect(0, 0, w, h);
+            if (typeof Debug !== 'undefined') Debug.player('setDisplayRect ' + w + 'x' + h);
+        } catch (e) {
+            if (typeof Debug !== 'undefined') Debug.warn('setDisplayRect: ' + e.message);
+        }
+    }
+
+    function setDisplayMethod() {
+        try {
+            // Letterbox preserves aspect ratio; full-screen would stretch.
+            api().setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX');
+            if (typeof Debug !== 'undefined') Debug.player('setDisplayMethod LETTER_BOX');
+        } catch (e) {
+            if (typeof Debug !== 'undefined') Debug.warn('setDisplayMethod: ' + e.message);
+        }
     }
 
     function setListener(name, fn) {
@@ -141,15 +158,28 @@ var Player = (function () {
         } catch (e) {}
 
         // prepareAsync is the modern path; falls back to prepare() if not present.
+        // CRITICAL: after prepare succeeds we must set the display rect + method
+        // AGAIN — AVPlay re-creates its surface internally and forgets prior
+        // calls.  Without this the player ends up rendering at 0×0 (no visible
+        // frame, no progress) even though state reports PLAYING.
+        function afterPrepareOK() {
+            setDisplayRect();
+            setDisplayMethod();
+            try {
+                api().play();
+                if (typeof Debug !== 'undefined') Debug.player('play() called');
+            } catch (e) {
+                if (typeof Debug !== 'undefined') Debug.error('play() after prepare: ' + e.message);
+            }
+            startPolling();
+            emit('onstatechange', 'playing');
+        }
+
         try {
             api().prepareAsync(
                 function () {
                     if (typeof Debug !== 'undefined') Debug.player('prepareAsync OK');
-                    try { api().play(); } catch (e) {
-                        if (typeof Debug !== 'undefined') Debug.error('play() after prepare: ' + e.message);
-                    }
-                    startPolling();
-                    emit('onstatechange', 'playing');
+                    afterPrepareOK();
                 },
                 function (err) {
                     if (typeof Debug !== 'undefined') Debug.error('prepareAsync failed: ' + JSON.stringify(err));
@@ -160,9 +190,7 @@ var Player = (function () {
             if (typeof Debug !== 'undefined') Debug.warn('prepareAsync threw, falling back to prepare(): ' + e.message);
             try {
                 api().prepare();
-                api().play();
-                startPolling();
-                emit('onstatechange', 'playing');
+                afterPrepareOK();
             } catch (e2) {
                 if (typeof Debug !== 'undefined') Debug.error('prepare() also failed: ' + e2.message);
                 emit('onerror', 'prepare failed: ' + (e2.message || e2));

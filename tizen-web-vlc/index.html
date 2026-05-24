@@ -61,6 +61,7 @@
             <button class="preset" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny (MP4)</button>
             <button class="preset" data-url="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8">Apple BipBop (HLS, 16:9)</button>
             <button class="preset" data-url="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH test (Akamai)</button>
+            <button class="preset" data-url="rtsp://9627b0bf2a7b.entrypoint.cloud.wowza.com:1935/app-p5260J38/66abe4b9_stream1">My Wowza RTSP</button>
             <button class="preset" data-url="rtsp://170.93.143.139:554/rtplive/470011e600ef003a004ee33696235daa">FAA RTSP (public)</button>
         </div>
     </div>
@@ -103,7 +104,9 @@
 
     <!-- Center error banner -->
     <div class="error-overlay hidden" id="error-overlay">
-        <div class="error-msg" id="error-msg"></div>
+        <div class="error-icon">!</div>
+        <div class="error-title" id="error-title">Playback error</div>
+        <div class="error-hint"  id="error-hint"></div>
         <button class="btn primary" data-action="back-home">Back to Home</button>
     </div>
 
