@@ -108,14 +108,6 @@ var Player = (function () {
 
     function open(url, opts) {
         opts = opts || {};
-
-        // Local file URI normalisation: Samsung AVPlay samples consistently
-        // use raw absolute paths (no file:// scheme).  If someone passes
-        // file:///opt/usr/media/... strip the scheme.
-        if (/^file:\/\//.test(url)) {
-            url = url.replace(/^file:\/\//, '');
-        }
-
         var streamType = sniffStreamType(url);
         if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ')');
         if (!api()) {
