@@ -6,8 +6,8 @@
  */
 
 var Debug = (function () {
-    var DEBUG    = true;
-    var PC_URL   = 'http://192.168.2.22:9999/';
+    var DEBUG    = false;
+    var PC_URL   = 'http://192.168.0.10:9999/';
     var startTs  = Date.now();
     var seq      = 0;
 
