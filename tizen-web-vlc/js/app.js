@@ -58,6 +58,7 @@
             if (typeof Debug !== 'undefined') Debug.player('state → ' + s);
             updatePlayPauseButton(s);
             if (s === 'playing') {
+                clearTimeout(openWatchdog);
                 hideSpinner();
                 showOSD(true);
                 scheduleOSDHide();
@@ -227,6 +228,7 @@
     }
 
     /* ── Common: open a URI in player view ────────────────────────── */
+    var openWatchdog = null;
     function playUri(uri, title) {
         if (typeof Debug !== 'undefined') Debug.player('playUri uri=' + uri + '  title=' + title);
         state.playingUri = uri;
@@ -246,6 +248,17 @@
             Player.setDisplayRect();
             Player.open(uri, { title: title });
         }, 50);
+
+        // Watchdog: if AVPlay never transitions to "playing" within 20 s, surface
+        // an error so the user isn't stuck on a forever-spinner.  Cleared by
+        // the onstatechange listener below.
+        clearTimeout(openWatchdog);
+        openWatchdog = setTimeout(function () {
+            if (Player.state() !== 'PLAYING' && Player.state() !== 'PAUSED') {
+                showError('Stuck loading after 20 s.  AVPlay state: ' + Player.state() +
+                          '.  The codec, container, or source may not be supported.');
+            }
+        }, 20000);
 
         pushRecent({ uri: uri, title: title || uri });
         scheduleOSDHide();
@@ -283,9 +296,24 @@
     function hideSpinner() { document.getElementById('spinner').classList.add('hidden'); }
 
     function showError(msg) {
-        document.getElementById('error-msg').textContent = msg;
-        document.getElementById('error-overlay').classList.remove('hidden');
+        // Hide all sibling overlays so the error stays the only focusable thing
+        document.getElementById('osd-top').classList.add('hidden');
+        document.getElementById('osd-bottom').classList.add('hidden');
+        document.getElementById('track-menu').classList.add('hidden');
         hideSpinner();
+
+        // Add a hint for the most common opaque error: codec-not-supported
+        var hint = '';
+        if (/unknown error|not supported|invalid/i.test(msg)) {
+            hint = '\n\nThe file or stream may use a codec/container that this ' +
+                   'TV can\'t decode (e.g. HEVC 10-bit, AV1, DTS-HD MA, VP9 ' +
+                   'Profile 2).  Try a different file or transcode it to ' +
+                   'H.264 + AAC in MP4 first.';
+        }
+
+        document.getElementById('error-msg').textContent = msg + hint;
+        document.getElementById('error-overlay').classList.remove('hidden');
+
         UI.refreshFocusables();
         var btn = document.querySelector('#error-overlay .btn');
         if (btn) UI.focusOn(btn);
@@ -361,22 +389,28 @@
             }
         }
 
+        // When the error overlay is up, route ALL navigation/activation to it
+        // (no seeking, no OSD flashing — the only thing on screen that matters
+        // is the "Back to Home" button).
+        var errorUp = !document.getElementById('error-overlay').classList.contains('hidden');
+
         switch (code) {
             case K.UP:    UI.moveFocus('up');    return true;
             case K.DOWN:  UI.moveFocus('down');  return true;
             case K.LEFT:
-                if (state.view === 'player') { Player.seekRel(-10000); flashOSD(); return true; }
+                if (state.view === 'player' && !errorUp) { Player.seekRel(-10000); flashOSD(); return true; }
                 UI.moveFocus('left');  return true;
             case K.RIGHT:
-                if (state.view === 'player') { Player.seekRel( 10000); flashOSD(); return true; }
+                if (state.view === 'player' && !errorUp) { Player.seekRel( 10000); flashOSD(); return true; }
                 UI.moveFocus('right'); return true;
             case K.ENTER:
-                if (state.view === 'player') { flashOSD(); return true; }
+                if (state.view === 'player' && !errorUp) { flashOSD(); return true; }
                 UI.activateFocused();  return true;
             case K.BACK:
-                if (state.view === 'browse') { browseUp(); return true; }
-                if (state.view === 'player') { backToHome(); return true; }
-                if (state.view === 'url')    { backToHome(); return true; }
+                if (errorUp)                  { backToHome(); return true; }
+                if (state.view === 'browse')  { browseUp();   return true; }
+                if (state.view === 'player')  { backToHome(); return true; }
+                if (state.view === 'url')     { backToHome(); return true; }
                 return false; /* let TV handle EXIT-from-home */
             case K.PLAY:
             case K.PAUSE:

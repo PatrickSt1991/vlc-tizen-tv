@@ -411,6 +411,7 @@ button:focus { outline: none; }
     padding: 80px;
     pointer-events: auto;
     text-align: center;
+    z-index: 100;  /* keep above OSDs so the "Back" button is clickable */
 }
 .error-overlay > * + * { margin-top: 32px; }
 .error-msg {
