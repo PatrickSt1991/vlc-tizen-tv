@@ -242,10 +242,11 @@
         showSpinner('Opening…');
         hideError();
 
-        // Need to defer slightly so the player object is laid out before
-        // setDisplayRect — otherwise we get a 0×0 display.
+        // Defer slightly so the <object> element is laid out before AVPlay
+        // tries to bind to it.  No need to call setDisplayRect here — AVPlay
+        // is in an idle state before open() and would error with INVALID_STATE.
+        // The proper setDisplayRect happens after prepareAsync succeeds.
         setTimeout(function () {
-            Player.setDisplayRect();
             Player.open(uri, { title: title });
         }, 50);
 
