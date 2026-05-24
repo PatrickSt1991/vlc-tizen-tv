@@ -132,23 +132,18 @@ var Player = (function () {
         if (!h5) h5 = document.getElementById('html5-video');
         return h5;
     }
+    var h5OpenWatchdog = null;
     function h5Open(url) {
         var v = h5el();
         v.style.display = 'block';
 
-        // Clear any previous <source> children and use the modern approach:
-        // an explicit <source> element with a MIME type hint.  Tizen's
-        // chromium 47-era WebView is conservative about format detection; the
-        // MIME hint can unlock formats it would otherwise reject from the
-        // extension alone (e.g. an .mkv whose contents are actually decodable
-        // when treated as video/webm).
         while (v.firstChild) v.removeChild(v.firstChild);
         var lower = String(url).toLowerCase().split('?')[0];
+        var isMkv = /\.mkv$/.test(lower);
         var sourceType = null;
-        if (/\.mkv$/.test(lower))      sourceType = 'video/webm';   // best-effort: try WebM demuxer on MKV
-        else if (/\.webm$/.test(lower)) sourceType = 'video/webm';
+        if (isMkv || /\.webm$/.test(lower))                    sourceType = 'video/webm';
         else if (/\.mp4$/.test(lower) || /\.m4v$/.test(lower)) sourceType = 'video/mp4';
-        else if (/\.mov$/.test(lower)) sourceType = 'video/mp4';
+        else if (/\.mov$/.test(lower))                         sourceType = 'video/mp4';
         else if (/\.ogg$/.test(lower) || /\.ogv$/.test(lower)) sourceType = 'video/ogg';
 
         if (sourceType) {
@@ -161,7 +156,25 @@ var Player = (function () {
             v.src = url;
         }
 
+        /* HTML5 <video> on Tizen 5.0 chromium silently swallows unsupported
+         * formats — no `error` event, no `loadedmetadata`, just hangs.  Bail
+         * out after 6s with a clear message instead of waiting for the global
+         * watchdog. */
+        clearTimeout(h5OpenWatchdog);
+        h5OpenWatchdog = setTimeout(function () {
+            if (!v.duration || v.duration === 0 || isNaN(v.duration)) {
+                if (typeof Debug !== 'undefined')
+                    Debug.error('H5 timeout: no metadata after 6s' + (isMkv ? ' (MKV)' : ''));
+                if (isMkv) {
+                    emit('onerror', 'MKV not supported by this TV');
+                } else {
+                    emit('onerror', 'HTML5 video: file format not supported');
+                }
+            }
+        }, 6000);
+
         v.onloadedmetadata = function () {
+            clearTimeout(h5OpenWatchdog);
             if (typeof Debug !== 'undefined') Debug.player('H5 metadata loaded; duration=' + v.duration + 's');
         };
         v.oncanplay = function () {
@@ -245,6 +258,7 @@ var Player = (function () {
         else                  play();
     }
     function stop() {
+        clearTimeout(h5OpenWatchdog);
         if (backend === BACKEND_HTML5) {
             var v = h5el();
             try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}

@@ -330,14 +330,17 @@
         // Hint for opaque codec-not-supported errors
         var hint = '';
         var uri = state.playingUri || '';
-        var isMkv = /\.mkv($|\?)/i.test(uri);
+        var isMkv = /\.mkv($|\?)/i.test(uri) || /MKV not supported/i.test(msg);
 
         if (isMkv) {
-            hint = 'MKV containers aren\'t fully supported by this TV\'s WebView. ' +
-                   'Remux to MP4 (no quality loss, takes seconds): ' +
-                   'ffmpeg -i input.mkv -c copy output.mp4 ' +
-                   '— if the audio is FLAC/DTS, also re-encode it: ' +
-                   'ffmpeg -i input.mkv -c:v copy -c:a aac -b:a 192k output.mp4';
+            // Replace the raw error with a clear headline; the hint carries
+            // the actionable detail.
+            msg = 'MKV files aren\'t supported on this TV';
+            hint = 'The TV\'s WebView can\'t decode MKV containers directly. ' +
+                   'Remux to MP4 — no quality loss, takes seconds:\n\n' +
+                   '    ffmpeg -i input.mkv -c copy output.mp4\n\n' +
+                   'If the audio codec is FLAC or DTS, also re-encode audio:\n\n' +
+                   '    ffmpeg -i input.mkv -c:v copy -c:a aac -b:a 192k output.mp4';
         } else if (/unknown error|not supported|invalid|stuck loading|unsupported source/i.test(msg)) {
             hint = 'The file or stream may use a codec or container that this TV can\'t ' +
                    'decode (HEVC 10-bit, AV1, DTS-HD MA, VP9 Profile 2, etc.). ' +

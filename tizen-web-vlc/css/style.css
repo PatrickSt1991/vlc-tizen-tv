@@ -459,6 +459,8 @@ button:focus { outline: none; }
     color: var(--fg-mute);
     max-width: 1000px;
     line-height: 1.5;
+    white-space: pre-line;  /* respect \n in the hint text so ffmpeg cmds are on their own lines */
+    text-align: left;
 }
 /* Legacy — kept in case any pre-update DOM still references it */
 .error-msg {
