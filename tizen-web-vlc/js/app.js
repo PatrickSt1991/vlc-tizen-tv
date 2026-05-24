@@ -149,9 +149,11 @@
                 var li = document.createElement('li');
                 li.dataset.tag = 'root-' + i;
                 li.dataset.idx = i;
+                var pretty = prettifyRootName(r.name);
+                var isUsb  = /removable|usb/i.test(r.name);
                 li.innerHTML  =
-                    '<span class="icon">▸</span>' +
-                    '<span class="name">' + escapeHtml(r.name) + '</span>' +
+                    '<span class="icon">' + (isUsb ? '💾' : '📁') + '</span>' +
+                    '<span class="name">' + escapeHtml(pretty) + '</span>' +
                     '<span class="meta">' + escapeHtml(r.fullPath) + '</span>';
                 li.addEventListener('click', function () {
                     state.browseAtRoot = false;
@@ -395,6 +397,18 @@
     }
 
     /* ── Helpers ──────────────────────────────────────────────────── */
+    function prettifyRootName(name) {
+        if (!name) return 'Unknown';
+        if (/^removable.*/i.test(name)) return 'USB Drive';
+        if (/^usb/i.test(name)) return 'USB Drive';
+        if (name === 'downloads') return 'Downloads';
+        if (name === 'videos')    return 'Videos';
+        if (name === 'music')     return 'Music';
+        if (name === 'images')    return 'Pictures';
+        if (name === 'documents') return 'Documents';
+        return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+
     function escapeHtml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
