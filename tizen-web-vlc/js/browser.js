@@ -128,9 +128,7 @@ var Browser = (function () {
                             size:     f.fileSize,
                             mtime:    f.modified,
                             file:     f,
-                            // Path the AVPlay native shim recognises for local
-                            // files — the toURI() form is the safest.
-                            uri:      typeof f.toURI === 'function' ? f.toURI() : 'file://' + f.fullPath,
+                            uri:      avplayURI(f),
                             fullPath: f.fullPath
                         };
                     });
@@ -154,6 +152,25 @@ var Browser = (function () {
     /* Return parent of a Tizen File via its parent property, or null at root. */
     function parentOf(file) {
         return file && file.parent ? file.parent : null;
+    }
+
+    /* Build the URI to hand to AVPlay for a local File.
+     *
+     * The web app's `tizen.filesystem` resolves USB drives to /opt/media/...
+     * but AVPlay (under a different SMACK label on Samsung retail TVs) often
+     * can only read the same files via the user-namespace bind mount at
+     * /opt/usr/media/...  Translating the path on the way to AVPlay is the
+     * usual fix for "AVPlay reports PLAYING but never decodes a frame".
+     *
+     * Returns a path WITHOUT the file:// scheme — Samsung samples show this
+     * works most reliably across firmware versions.  If a particular firmware
+     * requires file://, prepend it in the caller. */
+    function avplayURI(f) {
+        var p = f.fullPath || '';
+        // Common Samsung TV translations
+        if (p.indexOf('/opt/media/') === 0)            p = '/opt/usr' + p;
+        else if (p.indexOf('/opt/usr/home/owner/') === 0) p = p;  // already user-accessible
+        return p;
     }
 
     /* Convert a fileSize to "1.2 GB" style. */

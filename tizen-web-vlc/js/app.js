@@ -58,7 +58,9 @@
             if (typeof Debug !== 'undefined') Debug.player('state → ' + s);
             updatePlayPauseButton(s);
             if (s === 'playing') {
-                clearInterval(openWatchdog);
+                /* Don't clear the watchdog here — it needs to keep running so
+                 * it can detect the "PLAYING but stuck at time=0" case.  The
+                 * watchdog disarms itself once it sees time advancing. */
                 hideSpinner();
                 showOSD(true);
                 scheduleOSDHide();
