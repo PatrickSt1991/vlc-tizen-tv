@@ -66,12 +66,14 @@ var UI = (function () {
         try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
     }
 
-    /* Geometric next-element search by direction.  Falls back to the next/prev
-     * element in DOM order if nothing matches geometrically. */
-    function moveFocus(dir) {
+    /* Geometric next-element search by direction.  Returns true if focus
+     * moved geometrically, false otherwise.  When `noWrap` is set, returns
+     * false without touching focus if no geometric match is found — useful
+     * for callers that want to scroll a container instead of wrapping. */
+    function moveFocus(dir, noWrap) {
         refreshFocusables();
-        if (!focusable.length) return;
-        var current = focusable[focusIdx] || focusable[0];
+        if (!focusable.length) return false;
+        var current = document.querySelector('.focused') || focusable[focusIdx] || focusable[0];
         var cr = current.getBoundingClientRect();
         var ccx = cr.left + cr.width / 2, ccy = cr.top + cr.height / 2;
 
@@ -88,8 +90,6 @@ var UI = (function () {
                 (dir === 'right' && dx >  10)
             );
             if (!ok) continue;
-            // Distance with a perpendicular penalty so we prefer items roughly
-            // aligned along the axis of motion.
             var dist;
             if (dir === 'up' || dir === 'down')
                 dist = Math.abs(dy) + Math.abs(dx) * 2;
@@ -98,11 +98,14 @@ var UI = (function () {
             if (dist < bestDist) { bestDist = dist; best = el; }
         }
 
-        if (best) focusOn(best);
-        else if (dir === 'down' || dir === 'right')
+        if (best) { focusOn(best); return true; }
+        if (noWrap) return false;
+        // Cyclic fallback for callers that don't pass noWrap
+        if (dir === 'down' || dir === 'right')
             focusOn(focusable[(focusIdx + 1) % focusable.length]);
         else
             focusOn(focusable[(focusIdx - 1 + focusable.length) % focusable.length]);
+        return false;
     }
 
     function activateFocused() {

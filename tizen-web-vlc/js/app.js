@@ -746,17 +746,18 @@
     }
 
     /* On the settings view, after the last focusable row there's a TV-info
-     * panel that has no focusables.  Up/Down should first try a normal focus
-     * move; if focus didn't change (because there's nothing in that direction),
-     * we scroll the settings-content scroll container instead so the user can
-     * read past the bottom of the info panel. */
+     * panel that has no focusables.  Up/Down should:
+     *   1. Try to move focus geometrically (noWrap = don't cyclic-fallback).
+     *   2. If no element is in that direction, scroll the settings-content
+     *      panel instead so the user can read past the bottom of the info.
+     * Without noWrap the cyclic fallback would jump focus back to the
+     * opposite end and never trigger the scroll. */
     function scrollSettingsIfNoFocusMove(dy, dir) {
-        var before = document.querySelector('.focused');
-        UI.moveFocus(dir);
-        var after = document.querySelector('.focused');
-        if (before === after) {
-            var c = document.querySelector('.settings-content');
-            if (c) c.scrollBy({ top: dy, behavior: 'smooth' });
+        if (UI.moveFocus(dir, /*noWrap*/ true)) return;   // focus moved, done
+        var c = document.querySelector('.settings-content');
+        if (c) {
+            if (c.scrollBy) c.scrollBy({ top: dy, behavior: 'smooth' });
+            else            c.scrollTop += dy;
         }
     }
 

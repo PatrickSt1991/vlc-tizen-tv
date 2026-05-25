@@ -568,10 +568,14 @@ button:focus { outline: none; }
     text-align: left;
     overflow-y: auto;
     padding-bottom: 40px;
-    /* Constrain the scroll-region height so overflow actually triggers a
-     * scrollable area.  Header is ~80 px, view padding 60 px top + bottom. */
-    max-height: calc(100vh - 240px);
+    /* Hard-cap the scroll-region height so the TV-info panel always overflows
+     * and the Down-arrow scroll handler has something to scroll into.  Tuned
+     * for 1080p (window.innerHeight = 1080) but works fine on smaller too. */
+    height: calc(100vh - 260px);
+    /* Hide the native scrollbar — we navigate via remote, not pointer. */
+    scrollbar-width: none;
 }
+.settings-content::-webkit-scrollbar { display: none; }
 .settings-group {
     margin-bottom: 40px;
 }
