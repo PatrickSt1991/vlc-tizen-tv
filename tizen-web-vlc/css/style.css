@@ -380,6 +380,16 @@ button:focus { outline: none; }
     justify-content: center;
 }
 .controls > .ctrl + .ctrl { margin-left: 20px; }
+
+/* Visual separator pushes Stop apart from the playback / track controls so
+ * an accidental over-press from play-pause can't land on it. */
+.ctrl-sep {
+    display: inline-block;
+    width: 1px;
+    height: 56px;
+    margin: 0 28px;
+    background: rgba(255,255,255,.12);
+}
 .ctrl {
     background: rgba(255,255,255,.08);
     border: 3px solid transparent;
