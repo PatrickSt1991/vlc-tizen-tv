@@ -439,9 +439,11 @@
 
         document.getElementById('track-menu').classList.remove('hidden');
         UI.refreshFocusables();
-        // Prefer the currently-active entry as initial focus
+        // Land on the currently-active track if any, else the first real (non-
+        // muted) track item, else the Close button.
         var first = document.querySelector('#track-menu .active') ||
-                    document.querySelector('#track-menu li, #track-menu button');
+                    document.querySelector('#track-menu .track-section li:not(.muted)') ||
+                    document.querySelector('#track-menu button');
         if (first) UI.focusOn(first);
     }
     function closeTrackMenu() {

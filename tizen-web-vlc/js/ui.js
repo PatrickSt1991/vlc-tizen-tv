@@ -11,7 +11,8 @@ var UI = (function () {
     var focusIdx  = 0;
 
     var FOCUSABLE_SELECTOR =
-        'button, input, [tabindex="0"], .tile, .ctrl, .preset, .browse-list li';
+        'button, input, [tabindex="0"], .tile, .ctrl, .preset, ' +
+        '.browse-list li, .track-section li:not(.muted)';
 
     function showView(id) {
         var views = document.querySelectorAll('.view');
