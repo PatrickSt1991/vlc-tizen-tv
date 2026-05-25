@@ -131,21 +131,33 @@ jobs:
 
             1. Enable Developer Mode on your TV (`Apps → 1 2 3 4 5 → Developer Mode = ON`,
                set Host PC IP to your machine).
-            2. **Re-sign with your own Samsung distributor cert** — the WGT is
-               signed with a generic CI-generated cert, which won't match your
-               TV's DUID.  Use Tizen Studio's *Certificate Manager* to
-               regenerate, or run:
 
-               ```bash
-               tizen package -t wgt -s YourProfile -- /path/to/vlctv.wgt
-               ```
 
-            3. Install:
+            2. **Choose your installation method:**
+              ### ✅ Easy — via Jellyfin2Samsung (recommended)
+              Download and install automatically through [Jellyfin2Samsung](https://jellyfin2samsung.madebypatrick.nl/):
+              - Open the app, select **Tizen Community** as the release channel
+              - Pick **vlc-tizen-tv** and follow the on-screen steps
 
-               ```bash
-               sdb connect <tv-ip>
-               sdb install vlctv.wgt
-               ```
+              > Jellyfin2Samsung handles signing and sideloading for you.
+
+              ---
+               
+              ### 🔧 Manual — download & sideload yourself
+              > ⚠️ The `.wgt` in this release is signed with a generic CI cert and **will not match your TV's DUID**.
+              > You must re-sign it with your own Samsung distributor certificate first.
+            
+              **Re-sign:**
+                ```bash
+                  tizen package -t wgt -s YourProfile -- /path/to/vlctv.wgt
+                ```
+              *(Use Tizen Studio's Certificate Manager to create/select `YourProfile`)*
+            
+              **Install:**
+                ```bash
+                  sdb connect <tv-ip>
+                  sdb install vlctv.wgt
+                ```
 
             ## Whats in this build
             - All sources at the matching commit
