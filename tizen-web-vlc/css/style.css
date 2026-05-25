@@ -560,6 +560,7 @@ button:focus { outline: none; }
 /* ── Settings view ───────────────────────────────────────────────── */
 #view-settings {
     justify-content: flex-start;
+    align-items: center;
 }
 .settings-content {
     width: 100%;
@@ -567,6 +568,9 @@ button:focus { outline: none; }
     text-align: left;
     overflow-y: auto;
     padding-bottom: 40px;
+    /* Constrain the scroll-region height so overflow actually triggers a
+     * scrollable area.  Header is ~80 px, view padding 60 px top + bottom. */
+    max-height: calc(100vh - 240px);
 }
 .settings-group {
     margin-bottom: 40px;
@@ -631,14 +635,22 @@ button:focus { outline: none; }
     letter-spacing: 1.5px;
     font-weight: 500;
 }
+/* 2-column grid for the codec list — twice the density so everything fits
+ * on a 1080p screen without needing to scroll. */
+.tvinfo .codecs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 28px;
+}
 .tvinfo .codec {
     display: flex;
     padding: 4px 0;
+    font-size: 18px;
 }
-.tvinfo .codec .name  { flex: 0 0 220px; }
-.tvinfo .codec .status.ok      { color: #6ad06a; }
-.tvinfo .codec .status.maybe   { color: var(--accent-2); }
-.tvinfo .codec .status.no      { color: var(--danger); }
+.tvinfo .codec .name { flex: 0 0 160px; color: var(--fg-mute); }
+.tvinfo .codec .status.ok    { color: #6ad06a; }
+.tvinfo .codec .status.maybe { color: var(--accent-2); }
+.tvinfo .codec .status.no    { color: var(--danger); }
 
 /* ── Picker overlay (settings options, modal) ────────────────────── */
 .picker {

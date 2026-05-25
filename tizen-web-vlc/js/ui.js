@@ -27,8 +27,22 @@ var UI = (function () {
     }
 
     function refreshFocusables() {
-        focusable = currentView
-            ? Array.prototype.slice.call(currentView.querySelectorAll(FOCUSABLE_SELECTOR))
+        /* Scope focusables to whichever modal/overlay is currently visible,
+         * falling back to currentView for the normal case.  Without this the
+         * picker (#picker) and other body-level overlays would never appear
+         * in the focusable list because currentView.querySelectorAll can't
+         * reach them. */
+        var picker    = document.getElementById('picker');
+        var trackMenu = document.getElementById('track-menu');
+        var errorOv   = document.getElementById('error-overlay');
+
+        var scope = currentView;
+        if (picker    && !picker.classList.contains('hidden'))    scope = picker;
+        else if (errorOv   && !errorOv.classList.contains('hidden')) scope = errorOv;
+        else if (trackMenu && !trackMenu.classList.contains('hidden')) scope = trackMenu;
+
+        focusable = scope
+            ? Array.prototype.slice.call(scope.querySelectorAll(FOCUSABLE_SELECTOR))
             : [];
         focusable = focusable.filter(function (el) {
             return !el.classList.contains('hidden') && el.offsetParent !== null;
@@ -37,16 +51,19 @@ var UI = (function () {
 
     function focusOn(el) {
         if (!el) return;
-        for (var i = 0; i < focusable.length; i++)
-            focusable[i].classList.remove('focused');
+        // Clear .focused from everywhere, not just current focusables, so the
+        // class doesn't leak across overlays.
+        var prev = document.querySelectorAll('.focused');
+        for (var p = 0; p < prev.length; p++) prev[p].classList.remove('focused');
+
         el.classList.add('focused');
         el.focus({ preventScroll: false });
         focusIdx = focusable.indexOf(el);
         if (focusIdx < 0) focusIdx = 0;
-        // Scroll the list view to keep focus visible
-        if (el.parentElement && el.parentElement.classList.contains('browse-list')) {
-            el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        }
+
+        // Generic "scroll into view" so settings rows / picker items / browse
+        // list entries / etc. always stay visible when navigated to.
+        try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
     }
 
     /* Geometric next-element search by direction.  Falls back to the next/prev
@@ -89,13 +106,11 @@ var UI = (function () {
     }
 
     function activateFocused() {
-        var el = (currentView && currentView.querySelector('.focused')) ||
-                 document.querySelector('.track-menu .focused');
+        /* Look anywhere — picker / track menu / error overlay live outside
+         * the current view but still own focus when visible. */
+        var el = document.querySelector('.focused');
         if (!el) return false;
-        if (el.tagName === 'INPUT') {
-            // For inputs, ENTER acts as "submit" — handled by app.js
-            return false;
-        }
+        if (el.tagName === 'INPUT') return false;
         el.click();
         return true;
     }
@@ -107,7 +122,7 @@ var UI = (function () {
     function moveFocusCyclic(delta) {
         refreshFocusables();
         if (!focusable.length) return;
-        var current = (currentView && currentView.querySelector('.focused')) ||
+        var current = document.querySelector('.focused') ||
                       focusable[focusIdx] || focusable[0];
         var i = focusable.indexOf(current);
         if (i < 0) i = 0;

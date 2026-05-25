@@ -448,7 +448,7 @@
             row('Manufacturer',     b.manufacturer || '—');
             row('User-Agent',       ua);
 
-            var codecHtml = '<h3>HTML5 video codec support</h3>';
+            var codecHtml = '<h3>HTML5 video codec support</h3><div class="codecs">';
             Object.keys(codecs).forEach(function (name) {
                 var status = codecs[name];
                 var cls = status === 'probably' ? 'ok' : status === 'maybe' ? 'maybe' : 'no';
@@ -458,13 +458,18 @@
                 codecHtml += '<div class="codec"><span class="name">' + escapeHtml(name) + '</span>' +
                              '<span class="status ' + cls + '">' + label + '</span></div>';
             });
-            codecHtml += '<h3>Streaming &amp; protocols (via Samsung AVPlay)</h3>';
-            codecHtml += '<div class="codec"><span class="name">HLS / DASH / RTSP / RTMP</span>' +
+            codecHtml += '</div>';
+
+            codecHtml += '<h3>Streaming &amp; protocols (via Samsung AVPlay)</h3><div class="codecs">';
+            codecHtml += '<div class="codec"><span class="name">HLS / DASH</span>' +
                          '<span class="status ok">✓ Supported</span></div>';
-            codecHtml += '<div class="codec"><span class="name">USB local file playback</span>' +
-                         '<span class="status ok">✓ Supported (via HTML5 video)</span></div>';
+            codecHtml += '<div class="codec"><span class="name">RTSP / RTMP</span>' +
+                         '<span class="status ok">✓ Supported</span></div>';
+            codecHtml += '<div class="codec"><span class="name">USB local files</span>' +
+                         '<span class="status ok">✓ Via HTML5 video</span></div>';
             codecHtml += '<div class="codec"><span class="name">MKV container</span>' +
-                         '<span class="status maybe">? Limited — remux to MP4 if needed</span></div>';
+                         '<span class="status maybe">? Remux to MP4</span></div>';
+            codecHtml += '</div>';
 
             box.innerHTML = rows.join('') + codecHtml;
         });
@@ -621,6 +626,10 @@
                     flashOSD();
                     return true;
                 }
+                if (state.view === 'settings' && !pickerOpen) {
+                    scrollSettingsIfNoFocusMove(-200, 'up');
+                    return true;
+                }
                 UI.moveFocus('up');
                 return true;
             case K.DOWN:
@@ -628,6 +637,10 @@
                     if (!osdVisible) { flashOSD(); return true; }
                     UI.moveFocusCyclic(+1);
                     flashOSD();
+                    return true;
+                }
+                if (state.view === 'settings' && !pickerOpen) {
+                    scrollSettingsIfNoFocusMove(+200, 'down');
                     return true;
                 }
                 UI.moveFocus('down');
@@ -729,6 +742,21 @@
                     break;
                 }
             }
+        }
+    }
+
+    /* On the settings view, after the last focusable row there's a TV-info
+     * panel that has no focusables.  Up/Down should first try a normal focus
+     * move; if focus didn't change (because there's nothing in that direction),
+     * we scroll the settings-content scroll container instead so the user can
+     * read past the bottom of the info panel. */
+    function scrollSettingsIfNoFocusMove(dy, dir) {
+        var before = document.querySelector('.focused');
+        UI.moveFocus(dir);
+        var after = document.querySelector('.focused');
+        if (before === after) {
+            var c = document.querySelector('.settings-content');
+            if (c) c.scrollBy({ top: dy, behavior: 'smooth' });
         }
     }
 
