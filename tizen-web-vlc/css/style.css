@@ -109,8 +109,8 @@ button:focus { outline: none; }
 
 /* ── Home tiles ───────────────────────────────────────────────────── */
 .home-tiles {
-    display: grid; gap: 36px;
-    grid-template-columns: repeat(3, 320px);
+    display: grid; gap: 28px;
+    grid-template-columns: repeat(4, 280px);
     justify-content: center;
 }
 
@@ -536,6 +536,147 @@ button:focus { outline: none; }
     color: var(--fg);
     font-size: 16px;
     margin: 0 4px;
+}
+
+/* ── Repeat button (active state highlight) ──────────────────────── */
+.ctrl.repeat-on {
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+.ctrl.repeat-on::after {
+    content: '1';
+    position: absolute;
+    top: -2px; right: -2px;
+    width: 18px; height: 18px;
+    line-height: 18px;
+    text-align: center;
+    background: var(--accent);
+    color: var(--bg);
+    font-size: 12px; font-weight: 700;
+    border-radius: 50%;
+}
+.ctrl { position: relative; }   /* needed for the badge above */
+
+/* ── Settings view ───────────────────────────────────────────────── */
+#view-settings {
+    justify-content: flex-start;
+}
+.settings-content {
+    width: 100%;
+    max-width: 1100px;
+    text-align: left;
+    overflow-y: auto;
+    padding-bottom: 40px;
+}
+.settings-group {
+    margin-bottom: 40px;
+}
+.settings-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 28px;
+    margin-bottom: 12px;
+    background: var(--bg-card);
+    border: 3px solid var(--border);
+    border-radius: var(--r);
+    color: var(--fg);
+    text-align: left;
+    transition: border-color .15s ease, background .15s ease;
+}
+.settings-row:focus, .settings-row.focused {
+    border-color: var(--accent);
+    background: var(--bg-card-h);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.settings-label { font-size: 24px; }
+.settings-value {
+    font-size: 20px;
+    color: var(--accent);
+    font-weight: 500;
+}
+.settings-section-title {
+    margin: 20px 0 16px;
+    font-size: 22px;
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 500;
+}
+
+/* TV info table */
+.tvinfo {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 24px 28px;
+    font-size: 19px;
+    line-height: 1.6;
+}
+.tvinfo .row {
+    display: flex;
+    align-items: baseline;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+}
+.tvinfo .row:last-child { border-bottom: 0; }
+.tvinfo .k { flex: 0 0 220px; color: var(--fg-mute); }
+.tvinfo .v { flex: 1; color: var(--fg); word-break: break-all; }
+.tvinfo h3 {
+    margin: 18px 0 8px;
+    font-size: 18px;
+    color: var(--fg-mute);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-weight: 500;
+}
+.tvinfo .codec {
+    display: flex;
+    padding: 4px 0;
+}
+.tvinfo .codec .name  { flex: 0 0 220px; }
+.tvinfo .codec .status.ok      { color: #6ad06a; }
+.tvinfo .codec .status.maybe   { color: var(--accent-2); }
+.tvinfo .codec .status.no      { color: var(--danger); }
+
+/* ── Picker overlay (settings options, modal) ────────────────────── */
+.picker {
+    position: fixed;
+    top: 10%; left: 50%;
+    transform: translateX(-50%);
+    width: 600px; max-width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border: 2px solid var(--border);
+    border-radius: var(--r);
+    padding: 32px;
+    box-shadow: var(--shadow);
+    z-index: 200;
+    text-align: left;
+}
+.picker h2 {
+    margin: 0 0 20px;
+    font-size: 24px;
+    font-weight: 500;
+    color: var(--fg);
+}
+.picker ul {
+    list-style: none; margin: 0 0 20px; padding: 0;
+}
+.picker li {
+    padding: 14px 18px;
+    border-radius: 8px;
+    color: var(--fg);
+    transition: background .12s ease;
+    cursor: pointer;
+}
+.picker li.focused { background: var(--accent-soft); }
+.picker li.active::before {
+    content: '✓ ';
+    color: var(--accent);
+    font-weight: 700;
 }
 
 /* ── Toast ────────────────────────────────────────────────────────── */

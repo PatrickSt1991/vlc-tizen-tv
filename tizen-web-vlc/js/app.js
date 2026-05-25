@@ -64,6 +64,7 @@
                 hideSpinner();
                 showOSD(true);
                 scheduleOSDHide();
+                applyLanguagePreferences();
             }
         });
         Player.setListener('onerror', function (msg) {
@@ -80,6 +81,12 @@
             updateProgress(p && p.time, p && p.duration);
         });
         Player.setListener('oncomplete', function () {
+            if (Settings.get('repeatMode') === 'one' && state.playingUri) {
+                if (typeof Debug !== 'undefined') Debug.player('oncomplete: repeating');
+                Player.seekTo(0);
+                Player.play();
+                return;
+            }
             UI.toast('Playback finished');
             backToHome();
         });
@@ -88,6 +95,7 @@
         window.addEventListener('resize', Player.setDisplayRect);
 
         UI.showView('view-home');
+        updateRepeatButton();  // reflect saved repeat preference on OSD
     }
 
     /* ── Action dispatcher ────────────────────────────────────────── */
@@ -97,6 +105,7 @@
             case 'open-url':           UI.showView('view-url'); state.view = 'url'; break;
             case 'browse-usb':         openBrowserAtRoot(); break;
             case 'browse-recent':      openRecent(); break;
+            case 'open-settings':      openSettings(); break;
             case 'open-current-url': {
                 var v = document.getElementById('url-input').value.trim();
                 if (v) openUrl(v);
@@ -110,8 +119,13 @@
             case 'forward':            Player.seekRel( 10000); flashOSD(); break;
             case 'seek-backward':      Player.seekRel(-60000); flashOSD(); break;
             case 'seek-forward':       Player.seekRel( 60000); flashOSD(); break;
+            case 'toggle-repeat':      toggleRepeat(); break;
             case 'open-track-menu':    openTrackMenu(); break;
             case 'close-track-menu':   closeTrackMenu(); break;
+            case 'setting-audio-lang':    openLangPicker('audioLang',    'Preferred audio language', LanguageList.forAudio());    break;
+            case 'setting-subtitle-lang': openLangPicker('subtitleLang', 'Preferred subtitle language', LanguageList.forSubtitle()); break;
+            case 'setting-repeat-mode':   openRepeatPicker(); break;
+            case 'close-picker':       closePicker(); break;
         }
     }
 
@@ -238,6 +252,9 @@
     function playUri(uri, title, opts) {
         opts = opts || {};
         if (typeof Debug !== 'undefined') Debug.player('playUri uri=' + uri + '  title=' + title);
+        // Reset the once-per-file gate so applyLanguagePreferences runs for
+        // the new file (and not for the previous file).
+        prefsAppliedFor = null;
         state.playingUri = uri;
         state.playingTitle = title || uri;
         UI.showView('view-player'); state.view = 'player';
@@ -401,6 +418,121 @@
         return (h ? p(h) + ':' : '') + p(m) + ':' + p(s);
     }
 
+    /* ── Settings view ────────────────────────────────────────────── */
+    function openSettings() {
+        UI.showView('view-settings'); state.view = 'settings';
+        refreshSettingsValues();
+        renderTvInfo();
+    }
+    function refreshSettingsValues() {
+        document.getElementById('setting-audio-lang-value').textContent    = LanguageList.nameFor(Settings.get('audioLang'));
+        document.getElementById('setting-subtitle-lang-value').textContent = LanguageList.nameFor(Settings.get('subtitleLang'));
+        document.getElementById('setting-repeat-mode-value').textContent   = (Settings.get('repeatMode') === 'one') ? 'Repeat one' : 'Off';
+        // Mirror repeat state to the OSD button if visible
+        updateRepeatButton();
+    }
+    function renderTvInfo() {
+        var box  = document.getElementById('tvinfo');
+        var pInfo = TvInfo.getProductInfo();
+        var codecs = TvInfo.getCodecs();
+        var ua = TvInfo.getUA();
+
+        // Kick off the async build query; we render placeholder rows first.
+        TvInfo.getBuild(function (b) {
+            var rows = [];
+            function row(k, v) { rows.push('<div class="row"><div class="k">' + escapeHtml(k) + '</div><div class="v">' + escapeHtml(v || '—') + '</div></div>'); }
+            row('Model',            pInfo.realModel || b.model || '—');
+            row('Marketing name',   pInfo.tvName    || b.buildDescription || '—');
+            row('Firmware',         pInfo.firmwareVersion || b.buildVersion || '—');
+            row('Build release',    b.buildReleaseDate || '—');
+            row('Manufacturer',     b.manufacturer || '—');
+            row('User-Agent',       ua);
+
+            var codecHtml = '<h3>HTML5 video codec support</h3>';
+            Object.keys(codecs).forEach(function (name) {
+                var status = codecs[name];
+                var cls = status === 'probably' ? 'ok' : status === 'maybe' ? 'maybe' : 'no';
+                var label = status === 'probably' ? '✓ Supported' :
+                            status === 'maybe'    ? '? Possibly' :
+                                                    '✗ Not supported';
+                codecHtml += '<div class="codec"><span class="name">' + escapeHtml(name) + '</span>' +
+                             '<span class="status ' + cls + '">' + label + '</span></div>';
+            });
+            codecHtml += '<h3>Streaming &amp; protocols (via Samsung AVPlay)</h3>';
+            codecHtml += '<div class="codec"><span class="name">HLS / DASH / RTSP / RTMP</span>' +
+                         '<span class="status ok">✓ Supported</span></div>';
+            codecHtml += '<div class="codec"><span class="name">USB local file playback</span>' +
+                         '<span class="status ok">✓ Supported (via HTML5 video)</span></div>';
+            codecHtml += '<div class="codec"><span class="name">MKV container</span>' +
+                         '<span class="status maybe">? Limited — remux to MP4 if needed</span></div>';
+
+            box.innerHTML = rows.join('') + codecHtml;
+        });
+    }
+
+    /* ── Picker (generic option list, used for settings choices) ──── */
+    var pickerSetting = null;        // which setting we're editing
+    function openPicker(title, options, currentValue, onPick) {
+        document.getElementById('picker-title').textContent = title;
+        var ul = document.getElementById('picker-options');
+        ul.innerHTML = '';
+        options.forEach(function (opt) {
+            var li = document.createElement('li');
+            li.tabIndex = 0;
+            li.textContent = opt.name;
+            if (opt.code === currentValue) li.classList.add('active');
+            li.addEventListener('click', function () {
+                onPick(opt.code);
+                closePicker();
+            });
+            ul.appendChild(li);
+        });
+        document.getElementById('picker').classList.remove('hidden');
+        UI.refreshFocusables();
+        var first = document.querySelector('#picker .active') ||
+                    document.querySelector('#picker li, #picker button');
+        if (first) UI.focusOn(first);
+    }
+    function closePicker() {
+        document.getElementById('picker').classList.add('hidden');
+        pickerSetting = null;
+        UI.refreshFocusables();
+    }
+    function openLangPicker(settingKey, title, options) {
+        pickerSetting = settingKey;
+        var cur = Settings.get(settingKey);
+        openPicker(title, options, cur, function (val) {
+            Settings.set(settingKey, val);
+            refreshSettingsValues();
+            UI.toast(title + ': ' + LanguageList.nameFor(val));
+        });
+    }
+    function openRepeatPicker() {
+        pickerSetting = 'repeatMode';
+        var cur = Settings.get('repeatMode');
+        openPicker('Repeat mode', [
+            { code: 'off', name: 'Off' },
+            { code: 'one', name: 'Repeat current file' }
+        ], cur, function (val) {
+            Settings.set('repeatMode', val);
+            refreshSettingsValues();
+            UI.toast('Repeat: ' + (val === 'one' ? 'On' : 'Off'));
+        });
+    }
+
+    /* ── Repeat toggle from the OSD ───────────────────────────────── */
+    function toggleRepeat() {
+        var next = Settings.get('repeatMode') === 'one' ? 'off' : 'one';
+        Settings.set('repeatMode', next);
+        updateRepeatButton();
+        UI.toast('Repeat: ' + (next === 'one' ? 'On' : 'Off'));
+    }
+    function updateRepeatButton() {
+        var btn = document.getElementById('btn-repeat');
+        if (!btn) return;
+        btn.classList.toggle('repeat-on', Settings.get('repeatMode') === 'one');
+    }
+
     /* ── Track menu ───────────────────────────────────────────────── */
     function openTrackMenu() {
         var t = Player.getTracks();
@@ -471,8 +603,9 @@
         // is the "Back to Home" button).
         var errorUp = !document.getElementById('error-overlay').classList.contains('hidden');
 
-        // Track menu open? Routes through normal focus regardless of player view.
+        // Track menu / settings picker open? Routes through normal focus.
         var trackMenuOpen = !document.getElementById('track-menu').classList.contains('hidden');
+        var pickerOpen    = !document.getElementById('picker').classList.contains('hidden');
         // OSD currently visible? Determines whether keys navigate within OSD
         // or perform seek shortcuts.
         var osdVisible = !document.getElementById('osd-bottom').classList.contains('hidden');
@@ -526,11 +659,13 @@
                 }
                 UI.activateFocused();  return true;
             case K.BACK:
-                if (trackMenuOpen)            { closeTrackMenu(); return true; }
-                if (errorUp)                  { backToHome();     return true; }
-                if (state.view === 'browse')  { browseUp();       return true; }
-                if (state.view === 'player')  { backToHome();     return true; }
-                if (state.view === 'url')     { backToHome();     return true; }
+                if (pickerOpen)                 { closePicker();     return true; }
+                if (trackMenuOpen)              { closeTrackMenu();  return true; }
+                if (errorUp)                    { backToHome();      return true; }
+                if (state.view === 'browse')    { browseUp();        return true; }
+                if (state.view === 'player')    { backToHome();      return true; }
+                if (state.view === 'url')       { backToHome();      return true; }
+                if (state.view === 'settings')  { backToHome();      return true; }
                 return false; /* let TV handle EXIT-from-home */
             case K.PLAY:
             case K.PAUSE:
@@ -548,6 +683,53 @@
                 return false;
         }
         return false;
+    }
+
+    /* ── Auto-apply preferred audio + subtitle language ─────────────
+     * Called after the player reaches state=PLAYING so the AVPlay/HTML5
+     * track list is populated.  Finds the first track whose name (or, for
+     * HTML5 external subs, lang tag) matches the preferred ISO code and
+     * activates it.  Subtitle 'off' explicitly disables.  No-op if the
+     * preference is empty (Auto). */
+    var prefsAppliedFor = null;
+    function applyLanguagePreferences() {
+        // Only apply once per file to avoid clobbering manual selections
+        if (prefsAppliedFor === state.playingUri) return;
+        prefsAppliedFor = state.playingUri;
+
+        var prefAudio = Settings.get('audioLang');
+        var prefSub   = Settings.get('subtitleLang');
+        var tracks    = Player.getTracks();
+
+        // Audio: only act if user has a non-empty preference
+        if (prefAudio) {
+            for (var i = 0; i < tracks.audio.length; i++) {
+                var t = tracks.audio[i];
+                var nm = (t.name || '').toLowerCase();
+                if (nm.indexOf(prefAudio.toLowerCase()) >= 0) {
+                    Player.setAudioTrack(t.index);
+                    if (typeof Debug !== 'undefined') Debug.player('applied audio pref ' + prefAudio + ' → ' + t.name);
+                    break;
+                }
+            }
+        }
+
+        // Subtitle: 'off' explicit, '' auto (no action), code → match
+        if (prefSub === 'off') {
+            Player.setSubtitleTrack(-1);
+        } else if (prefSub) {
+            for (var j = 0; j < tracks.subtitle.length; j++) {
+                var st = tracks.subtitle[j];
+                if (st.off) continue;
+                var sn = (st.name || '').toLowerCase();
+                if (sn.indexOf(prefSub.toLowerCase()) >= 0 ||
+                    sn.indexOf('[' + prefSub.toLowerCase() + ']') >= 0) {
+                    Player.setSubtitleTrack(st.index);
+                    if (typeof Debug !== 'undefined') Debug.player('applied subtitle pref ' + prefSub + ' → ' + st.name);
+                    break;
+                }
+            }
+        }
     }
 
     /* ── Helpers ──────────────────────────────────────────────────── */
