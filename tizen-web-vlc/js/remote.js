@@ -63,8 +63,12 @@ var Remote = (function () {
         var code = ev.keyCode;
         for (var i = 0; i < listeners.length; i++) {
             if (listeners[i](code, ev) === true) {
+                /* preventDefault is critical for BACK: without it, Tizen's
+                 * launchpad treats it as "exit app" alongside our handler,
+                 * leading to a half-exit / app-restart cycle on some TVs. */
                 ev.preventDefault();
                 ev.stopPropagation();
+                if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
                 return;
             }
         }

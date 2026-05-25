@@ -88,7 +88,8 @@ var UI = (function () {
     }
 
     function activateFocused() {
-        var el = currentView && currentView.querySelector('.focused');
+        var el = (currentView && currentView.querySelector('.focused')) ||
+                 document.querySelector('.track-menu .focused');
         if (!el) return false;
         if (el.tagName === 'INPUT') {
             // For inputs, ENTER acts as "submit" — handled by app.js
@@ -96,6 +97,21 @@ var UI = (function () {
         }
         el.click();
         return true;
+    }
+
+    /* Move focus to the previous/next focusable in DOM order, cycling.
+     * Used by the player OSD: Up/Down should walk through the row of round
+     * controls regardless of geometry (they're side-by-side, so moveFocus()'s
+     * directional search wouldn't find them on Up/Down). */
+    function moveFocusCyclic(delta) {
+        refreshFocusables();
+        if (!focusable.length) return;
+        var current = (currentView && currentView.querySelector('.focused')) ||
+                      focusable[focusIdx] || focusable[0];
+        var i = focusable.indexOf(current);
+        if (i < 0) i = 0;
+        var next = focusable[(i + delta + focusable.length) % focusable.length];
+        focusOn(next);
     }
 
     /* Toast: brief on-screen message. */
@@ -109,12 +125,13 @@ var UI = (function () {
     }
 
     return {
-        showView: showView,
-        focusOn: focusOn,
-        moveFocus: moveFocus,
-        activateFocused: activateFocused,
+        showView:          showView,
+        focusOn:           focusOn,
+        moveFocus:         moveFocus,
+        moveFocusCyclic:   moveFocusCyclic,
+        activateFocused:   activateFocused,
         refreshFocusables: refreshFocusables,
-        toast: toast,
+        toast:             toast,
         get currentView() { return currentView; }
     };
 })();

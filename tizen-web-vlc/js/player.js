@@ -261,16 +261,24 @@ var Player = (function () {
     }
     function stop() {
         clearTimeout(h5OpenWatchdog);
-        if (backend === BACKEND_HTML5) {
-            var v = h5el();
-            try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+        // Always fully tear down BOTH backends — some firmwares leave the
+        // hidden one alive (auto-replaying audio on view switch).
+        var v = h5el();
+        if (v) {
+            try { v.pause(); } catch (e) {}
+            try { v.currentTime = 0; } catch (e) {}
+            try { v.removeAttribute('src'); } catch (e) {}
+            // Detach any <track>/<source> children
+            while (v.firstChild) v.removeChild(v.firstChild);
+            try { v.load(); } catch (e) {}
             v.style.display = 'none';
-        } else if (backend === BACKEND_AVPLAY) {
-            avStopPolling();
-            try { av().stop();  } catch (e) {}
-            try { av().close(); } catch (e) {}
         }
+        avStopPolling();
+        try { if (av()) av().stop();  } catch (e) {}
+        try { if (av()) av().close(); } catch (e) {}
+
         backend = BACKEND_NONE;
+        h5Subtitles = [];
         emit('onstatechange', 'stopped');
     }
     function seekRel(deltaMs) {

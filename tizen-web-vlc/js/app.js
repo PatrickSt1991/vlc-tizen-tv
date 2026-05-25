@@ -310,9 +310,18 @@
     /* ── OSD show/hide ────────────────────────────────────────────── */
     var osdHideTimer = null;
     function showOSD(visible) {
+        var wasHidden = document.getElementById('osd-bottom').classList.contains('hidden');
         document.getElementById('osd-top').classList.toggle('hidden', !visible);
         document.getElementById('osd-bottom').classList.toggle('hidden', !visible);
-        if (visible) UI.refreshFocusables();
+        if (visible) {
+            UI.refreshFocusables();
+            // Auto-focus the play-pause button when the OSD first appears, so
+            // Up/Down navigation has an anchor and ENTER activates something.
+            if (wasHidden) {
+                var pp = document.getElementById('btn-playpause');
+                if (pp) UI.focusOn(pp);
+            }
+        }
     }
     function scheduleOSDHide() {
         clearTimeout(osdHideTimer);
@@ -460,23 +469,57 @@
         // is the "Back to Home" button).
         var errorUp = !document.getElementById('error-overlay').classList.contains('hidden');
 
+        // Track menu open? Routes through normal focus regardless of player view.
+        var trackMenuOpen = !document.getElementById('track-menu').classList.contains('hidden');
+        // OSD currently visible? Determines whether keys navigate within OSD
+        // or perform seek shortcuts.
+        var osdVisible = !document.getElementById('osd-bottom').classList.contains('hidden');
+
         switch (code) {
-            case K.UP:    UI.moveFocus('up');    return true;
-            case K.DOWN:  UI.moveFocus('down');  return true;
+            case K.UP:
+                if (state.view === 'player' && !errorUp && !trackMenuOpen) {
+                    if (!osdVisible) { flashOSD(); return true; }
+                    UI.moveFocusCyclic(-1);   // prev OSD button
+                    flashOSD();
+                    return true;
+                }
+                UI.moveFocus('up');
+                return true;
+            case K.DOWN:
+                if (state.view === 'player' && !errorUp && !trackMenuOpen) {
+                    if (!osdVisible) { flashOSD(); return true; }
+                    UI.moveFocusCyclic(+1);   // next OSD button
+                    flashOSD();
+                    return true;
+                }
+                UI.moveFocus('down');
+                return true;
             case K.LEFT:
-                if (state.view === 'player' && !errorUp) { Player.seekRel(-10000); flashOSD(); return true; }
+                if (state.view === 'player' && !errorUp && !trackMenuOpen) {
+                    Player.seekRel(-10000); flashOSD(); return true;
+                }
                 UI.moveFocus('left');  return true;
             case K.RIGHT:
-                if (state.view === 'player' && !errorUp) { Player.seekRel( 10000); flashOSD(); return true; }
+                if (state.view === 'player' && !errorUp && !trackMenuOpen) {
+                    Player.seekRel( 10000); flashOSD(); return true;
+                }
                 UI.moveFocus('right'); return true;
             case K.ENTER:
-                if (state.view === 'player' && !errorUp) { flashOSD(); return true; }
+                // In player view: OK activates the focused OSD button if the OSD
+                // is up (so Stop / CC-Audio / etc. are reachable).  If the OSD
+                // is hidden, OK just brings it up.
+                if (state.view === 'player' && !errorUp && !trackMenuOpen) {
+                    if (!osdVisible) { flashOSD(); return true; }
+                    if (!UI.activateFocused()) flashOSD();
+                    return true;
+                }
                 UI.activateFocused();  return true;
             case K.BACK:
-                if (errorUp)                  { backToHome(); return true; }
-                if (state.view === 'browse')  { browseUp();   return true; }
-                if (state.view === 'player')  { backToHome(); return true; }
-                if (state.view === 'url')     { backToHome(); return true; }
+                if (trackMenuOpen)            { closeTrackMenu(); return true; }
+                if (errorUp)                  { backToHome();     return true; }
+                if (state.view === 'browse')  { browseUp();       return true; }
+                if (state.view === 'player')  { backToHome();     return true; }
+                if (state.view === 'url')     { backToHome();     return true; }
                 return false; /* let TV handle EXIT-from-home */
             case K.PLAY:
             case K.PAUSE:
