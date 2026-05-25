@@ -476,10 +476,13 @@
         var osdVisible = !document.getElementById('osd-bottom').classList.contains('hidden');
 
         switch (code) {
+            // All four arrows in player view navigate between OSD buttons.
+            // Seek is on the dedicated FF / RW media keys instead, so arrows
+            // don't fight navigation with seeking.
             case K.UP:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
                     if (!osdVisible) { flashOSD(); return true; }
-                    UI.moveFocusCyclic(-1);   // prev OSD button
+                    UI.moveFocusCyclic(-1);
                     flashOSD();
                     return true;
                 }
@@ -488,7 +491,7 @@
             case K.DOWN:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
                     if (!osdVisible) { flashOSD(); return true; }
-                    UI.moveFocusCyclic(+1);   // next OSD button
+                    UI.moveFocusCyclic(+1);
                     flashOSD();
                     return true;
                 }
@@ -496,12 +499,18 @@
                 return true;
             case K.LEFT:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
-                    Player.seekRel(-10000); flashOSD(); return true;
+                    if (!osdVisible) { flashOSD(); return true; }
+                    UI.moveFocusCyclic(-1);    // previous OSD button
+                    flashOSD();
+                    return true;
                 }
                 UI.moveFocus('left');  return true;
             case K.RIGHT:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
-                    Player.seekRel( 10000); flashOSD(); return true;
+                    if (!osdVisible) { flashOSD(); return true; }
+                    UI.moveFocusCyclic(+1);    // next OSD button
+                    flashOSD();
+                    return true;
                 }
                 UI.moveFocus('right'); return true;
             case K.ENTER:
