@@ -91,10 +91,25 @@ var Player = (function () {
         }
     }
 
-    /* AVPlay subtitle painter — onsubtitlechange(duration, text) hands us
-     * the cue text + how long to show it.  We strip HTML / ASS overrides,
-     * decode common entities and paint into #subtitle-overlay. */
+    /* AVPlay subtitle painter — three paths feed into the same overlay:
+     *
+     *   1. AVPlay's onsubtitlechange callback (used for embedded subs).  On
+     *      some Tizen 5.0 firmwares this fires only for the first cue at
+     *      track-select time, so we don't rely on it for external SRTs.
+     *
+     *   2. Time-based polling against parsed external SRT/VTT/ASS cues.
+     *      When an external subtitle is selected, we parse the file once,
+     *      store cues, and a 250 ms interval checks Player.currentTime()
+     *      and paints the matching cue.  Bullet-proof against AVPlay's
+     *      callback quirks.
+     *
+     *   3. HTML5 <track> rendering when the HTML5 backend is active —
+     *      handled in h5Open.
+     */
     var subClearTimer = null;
+    var extCues = null;            // parsed external cues [{start, end, text}]
+    var extPollTimer = null;
+    var extLastCueIdx = -1;
     function subEl() { return document.getElementById('subtitle-overlay'); }
     function showSubtitleText(text, durationMs) {
         var el = subEl();
@@ -132,6 +147,86 @@ var Player = (function () {
         clearTimeout(subClearTimer);
         var el = subEl();
         if (el) { el.textContent = ''; el.classList.add('hidden'); }
+    }
+
+    /* ── External subtitle file (time-based, backend-agnostic) ──────────
+     *
+     * Parses an SRT/VTT/ASS file into [{start, end, text}] cues, then sets
+     * up a 250 ms interval that checks Player.currentTime() and paints the
+     * matching cue.  Works on AVPlay even when its own subtitle callback
+     * is unreliable. */
+    function startExternalSubtitle(sub) {
+        stopExternalSubtitle();
+        if (!sub || typeof Browser === 'undefined' || !Browser.readSubtitleText) return;
+        Browser.readSubtitleText(sub, function (err, text) {
+            if (err) {
+                if (typeof Debug !== 'undefined') Debug.error('external sub load: ' + (err.message || err));
+                return;
+            }
+            switch (sub.ext) {
+                case 'vtt':                 extCues = parseVttCues(text); break;
+                case 'srt':                 extCues = parseSrtCues(text); break;
+                case 'ass':
+                case 'ssa':                 extCues = parseVttCues(assToVtt(text)); break;
+                case 'smi':
+                case 'sami':                extCues = parseVttCues(smiToVtt(text)); break;
+                default:                    extCues = parseSrtCues(text); break;
+            }
+            if (typeof Debug !== 'undefined') Debug.player('external sub loaded: ' + extCues.length + ' cues');
+            extLastCueIdx = -1;
+            extPollTimer = setInterval(extPoll, 250);
+        });
+    }
+    function stopExternalSubtitle() {
+        clearInterval(extPollTimer);
+        extPollTimer = null;
+        extCues = null;
+        extLastCueIdx = -1;
+        hideSubtitleText();
+    }
+    function extPoll() {
+        if (!extCues || !extCues.length) return;
+        var t = 0;
+        if (backend === BACKEND_AVPLAY) {
+            try { t = av().getCurrentTime() / 1000; } catch (e) {}
+        } else if (backend === BACKEND_HTML5) {
+            t = h5el().currentTime || 0;
+        }
+        // Find the cue whose [start, end) contains t.  Cues are sorted; we
+        // binary-ish search by scanning since N is small.
+        var idx = -1;
+        for (var i = 0; i < extCues.length; i++) {
+            if (t >= extCues[i].start && t < extCues[i].end) { idx = i; break; }
+            if (extCues[i].start > t) break;
+        }
+        if (idx === extLastCueIdx) return;
+        extLastCueIdx = idx;
+        if (idx < 0) hideSubtitleText();
+        else         showSubtitleText(extCues[idx].text, 0);   // 0 → no timer
+    }
+
+    function parseSrtCues(srt) {
+        var out = [];
+        var blocks = String(srt || '').replace(/\r/g, '').split(/\n\n+/);
+        for (var i = 0; i < blocks.length; i++) {
+            var lines = blocks[i].split('\n');
+            // Skip optional numeric index
+            var idx = 0;
+            if (/^\d+$/.test(lines[idx])) idx++;
+            var m = /(\d\d):(\d\d):(\d\d)[,.](\d{3})\s*-->\s*(\d\d):(\d\d):(\d\d)[,.](\d{3})/.exec(lines[idx] || '');
+            if (!m) continue;
+            var start = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / 1000;
+            var end   = (+m[5]) * 3600 + (+m[6]) * 60 + (+m[7]) + (+m[8]) / 1000;
+            var text  = lines.slice(idx + 1).join('\n').trim();
+            if (text) out.push({ start: start, end: end, text: text });
+        }
+        return out;
+    }
+    function parseVttCues(vtt) {
+        // Strip the WEBVTT header then treat the body like SRT (timecodes use
+        // dot-decimal; the regex in parseSrtCues accepts both . and ,).
+        var body = String(vtt || '').replace(/^WEBVTT[^\n]*\n/, '');
+        return parseSrtCues(body);
     }
 
     var avPollTimer = null;
@@ -274,11 +369,14 @@ var Player = (function () {
         return h5;
     }
     var h5OpenWatchdog = null;
-    var h5Subtitles = [];   // [{ name, lang, uri, file, ext }] passed in opts.subtitles
+    var playerSubtitles = [];   // sibling subtitle files, regardless of backend
+    /* Legacy alias — older code paths used h5Subtitles directly */
+    var h5Subtitles = playerSubtitles;
     function h5Open(url, opts) {
         var v = h5el();
         v.style.display = 'block';
-        h5Subtitles = (opts && opts.subtitles) ? opts.subtitles.slice() : [];
+        // playerSubtitles is set in open() for both backends; keep alias
+        h5Subtitles = playerSubtitles;
 
         while (v.firstChild) v.removeChild(v.firstChild);
         var lower = String(url).toLowerCase().split('?')[0];
@@ -369,9 +467,12 @@ var Player = (function () {
 
     function open(url, opts) {
         opts = opts || {};
+        playerSubtitles = (opts.subtitles) ? opts.subtitles.slice() : [];
+        h5Subtitles = playerSubtitles;
+        stopExternalSubtitle();    // clear any previous file's poller
         backend = pickBackend(url);
         var streamType = sniffStreamType(url);
-        if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ', backend=' + backend + ')');
+        if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ', backend=' + backend + ', subs=' + playerSubtitles.length + ')');
 
         if (backend === BACKEND_HTML5) {
             // Hide AVPlay's object so the HTML5 video element is the only thing rendering
@@ -420,6 +521,7 @@ var Player = (function () {
     }
     function stop() {
         clearTimeout(h5OpenWatchdog);
+        stopExternalSubtitle();
         hideSubtitleText();
         // Always fully tear down BOTH backends — some firmwares leave the
         // hidden one alive (auto-replaying audio on view switch).
@@ -529,9 +631,6 @@ var Player = (function () {
                 for (var i = 0; i < info.length; i++) {
                     var t = info[i];
                     var parsed = parseAvExtraInfo(t.extra_info);
-                    // VIDEO tracks: do not show in the picker.  AVPlay also
-                    // returns these from getTotalTrackInfo and we don't want
-                    // an entry like "h264" misclassified as a subtitle.
                     if (t.type === 'VIDEO') continue;
                     if (t.type === 'AUDIO') {
                         out.audio.push({
@@ -542,15 +641,26 @@ var Player = (function () {
                         });
                     } else if (t.type === 'TEXT' || t.type === 'SUBTITLE') {
                         out.subtitle.push({
-                            index: t.index,
-                            name:  parsed.label || ('Subtitle ' + t.index),
+                            index: 'embed:' + t.index,
+                            name:  '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
                             lang:  parsed.lang || '',
-                            type:  'AVPLAY'
+                            type:  'AVPLAY_EMBED'
                         });
                     }
-                    // Anything else (DRM, METADATA, etc.) is ignored.
                 }
             } catch (e) {}
+            // ALSO list any external sibling subtitle files — these are the
+            // reliable path on this firmware (AVPlay's onsubtitlechange
+            // doesn't fire for subsequent cues, so we time-poll them ourselves).
+            for (var k = 0; k < playerSubtitles.length; k++) {
+                var s = playerSubtitles[k];
+                out.subtitle.push({
+                    index: 'ext:' + k,
+                    name:  (s.lang ? '[' + s.lang.toUpperCase() + '] ' : '') + s.name,
+                    lang:  s.lang || '',
+                    type:  'AVPLAY_EXTERNAL'
+                });
+            }
             return out;
         }
 
@@ -614,17 +724,33 @@ var Player = (function () {
 
     function setSubtitleTrack(index) {
         if (backend === BACKEND_AVPLAY) {
-            // Clear the on-screen overlay before switching so an old cue
-            // doesn't linger past the change.
             hideSubtitleText();
-            if (index < 0 || index === undefined) {
-                // "Off" — try disabling via the firmware's preferred API.
+            stopExternalSubtitle();
+
+            // "Off"
+            if (index === -1 || index === undefined || index === 'off') {
                 try { av().setSilentSubtitle(true); } catch (e) {}
                 return;
             }
+
+            // External subtitle file: "ext:<k>" — load + time-poll ourselves
+            if (typeof index === 'string' && index.indexOf('ext:') === 0) {
+                var k = parseInt(index.slice(4), 10);
+                var sub = playerSubtitles[k];
+                if (sub) {
+                    try { av().setSilentSubtitle(true); } catch (e) {}   // mute AVPlay's own subs
+                    startExternalSubtitle(sub);
+                }
+                return;
+            }
+
+            // Embedded subtitle: "embed:<i>" — delegate to AVPlay's own track API
+            var embedIdx = (typeof index === 'string' && index.indexOf('embed:') === 0)
+                ? parseInt(index.slice(6), 10)
+                : index;
             try { av().setSilentSubtitle(false); } catch (e) {}
-            try { av().setSelectTrack('TEXT', index); }
-            catch (e) { try { av().setSelectTrack('SUBTITLE', index); } catch (e2) {} }
+            try { av().setSelectTrack('TEXT', embedIdx); }
+            catch (e) { try { av().setSelectTrack('SUBTITLE', embedIdx); } catch (e2) {} }
             return;
         }
         if (backend !== BACKEND_HTML5) return;
