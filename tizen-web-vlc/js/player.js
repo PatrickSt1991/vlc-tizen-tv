@@ -110,8 +110,22 @@ var Player = (function () {
         el.textContent = s;
         el.classList.remove('hidden');
         clearTimeout(subClearTimer);
-        if (durationMs && durationMs > 0) {
-            subClearTimer = setTimeout(hideSubtitleText, durationMs);
+
+        /* AVPlay's `duration` is wildly unreliable.  Observed values:
+         *   0           — used as a "clear previous cue" signal
+         *   ~1000-8000  — a sane per-cue duration in ms
+         *   3,500,000   — bogus "rest of stream" value (would freeze
+         *                 the overlay for 58 minutes)
+         *
+         * Treat 0 as "show until next cue" (no timer).
+         * Treat huge values the same way — assume the next SUB cb will
+         * replace this cue, and cap at 8 s as a safety net so a single
+         * cue can't stay stuck if AVPlay never fires again. */
+        var d = (typeof durationMs === 'number' && durationMs > 0)
+                  ? durationMs : 0;
+        if (d > 30000) d = 8000;        // bogus: cap at 8 s safety net
+        if (d > 0) {
+            subClearTimer = setTimeout(hideSubtitleText, d);
         }
     }
     function hideSubtitleText() {
