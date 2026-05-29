@@ -126,19 +126,18 @@ var Player = (function () {
         el.classList.remove('hidden');
         clearTimeout(subClearTimer);
 
-        /* AVPlay's `duration` is wildly unreliable.  Observed values:
-         *   0           — used as a "clear previous cue" signal
-         *   ~1000-8000  — a sane per-cue duration in ms
-         *   3,500,000   — bogus "rest of stream" value (would freeze
-         *                 the overlay for 58 minutes)
-         *
-         * Treat 0 as "show until next cue" (no timer).
-         * Treat huge values the same way — assume the next SUB cb will
-         * replace this cue, and cap at 8 s as a safety net so a single
-         * cue can't stay stuck if AVPlay never fires again. */
-        var d = (typeof durationMs === 'number' && durationMs > 0)
-                  ? durationMs : 0;
-        if (d > 30000) d = 8000;        // bogus: cap at 8 s safety net
+        /* AVPlay reports cue duration in MICROSECONDS on Tizen 5.0, not
+         * milliseconds.  An SRT cue with 0:00.000 → 0:03.500 (3500 ms) is
+         * delivered as duration=3500000.  Divide by 1000 to get ms.
+         * 0 (and absurd >5min values) means 'show until next cue'; we
+         * cap at 8s as a safety net so a single cue can't be stuck
+         * forever if AVPlay never fires the next SUB cb. */
+        var d = 0;
+        if (typeof durationMs === 'number' && durationMs > 0) {
+            d = durationMs >= 1000 ? Math.round(durationMs / 1000) : durationMs;
+            if (d > 300000) d = 0;       // > 5 minutes treated as 'no end given'
+        }
+        if (d > 30000) d = 8000;         // safety net
         if (d > 0) {
             subClearTimer = setTimeout(hideSubtitleText, d);
         }
