@@ -642,19 +642,16 @@ var Player = (function () {
                             lang:  parsed.lang || '',
                             type:  'AVPLAY'
                         });
-                    } else if (t.type === 'TEXT' || t.type === 'SUBTITLE') {
-                        out.subtitle.push({
-                            index: 'embed:' + t.index,
-                            name:  '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
-                            lang:  parsed.lang || '',
-                            type:  'AVPLAY_EMBED'
-                        });
                     }
+                    /* Embedded TEXT/SUBTITLE tracks from getTotalTrackInfo are
+                     * NOT listed.  On Tizen 5.0 AVPlay only fires SUB cb for
+                     * the first cue and never updates, so embedded subs would
+                     * appear in the menu but fail past the first cue —
+                     * confusing UX.  External SRT siblings below render via
+                     * our reliable time-poller. */
                 }
             } catch (e) {}
-            // ALSO list any external sibling subtitle files — these are the
-            // reliable path on this firmware (AVPlay's onsubtitlechange
-            // doesn't fire for subsequent cues, so we time-poll them ourselves).
+            // External sibling subtitle files — the reliable rendering path
             for (var k = 0; k < playerSubtitles.length; k++) {
                 var s = playerSubtitles[k];
                 out.subtitle.push({
