@@ -322,6 +322,29 @@ button:focus { outline: none; }
     display: none;  /* shown only when playing a local file */
 }
 
+/* AVPlay subtitle overlay — for embedded text/subtitle tracks selected via
+ * the CC menu.  AVPlay fires onsubtitlechange(duration, text, ...) and we
+ * paint into this element.  HTML5 <track> handles its own rendering. */
+#subtitle-overlay {
+    position: absolute;
+    left: 8%; right: 8%;
+    bottom: 8%;
+    text-align: center;
+    color: #fff;
+    font-size: 36px;
+    font-weight: 500;
+    line-height: 1.3;
+    text-shadow:
+         0 0 4px rgba(0,0,0,.95),
+         2px 2px 0 rgba(0,0,0,.85),
+        -2px 2px 0 rgba(0,0,0,.85),
+         2px -2px 0 rgba(0,0,0,.85),
+        -2px -2px 0 rgba(0,0,0,.85);
+    pointer-events: none;
+    white-space: pre-line;
+    z-index: 50;            /* above the video plane, below OSDs */
+}
+
 #view-player {
     padding: 0;
     pointer-events: none;

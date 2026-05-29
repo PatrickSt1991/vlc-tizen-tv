@@ -17,6 +17,11 @@
      file:// just fine. -->
 <video id="html5-video" playsinline></video>
 
+<!-- Subtitle overlay — AVPlay doesn't auto-render text subs (TEXT/SUBTITLE
+     tracks).  It fires onsubtitlechange(duration, text, ...) and we paint
+     the text here. -->
+<div id="subtitle-overlay" class="hidden"></div>
+
 <!-- ── Home view ─────────────────────────────────────────────────────── -->
 <section id="view-home" class="view">
     <header class="brand">

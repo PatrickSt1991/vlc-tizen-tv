@@ -91,6 +91,35 @@ var Player = (function () {
         }
     }
 
+    /* AVPlay subtitle painter — onsubtitlechange(duration, text) hands us
+     * the cue text + how long to show it.  We strip HTML / ASS overrides,
+     * decode common entities and paint into #subtitle-overlay. */
+    var subClearTimer = null;
+    function subEl() { return document.getElementById('subtitle-overlay'); }
+    function showSubtitleText(text, durationMs) {
+        var el = subEl();
+        if (!el) return;
+        var s = String(text == null ? '' : text)
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\{\\[^}]*\}/g, '')                 // ASS override tags
+            .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"')
+            .trim();
+        if (!s) { hideSubtitleText(); return; }
+        el.textContent = s;
+        el.classList.remove('hidden');
+        clearTimeout(subClearTimer);
+        if (durationMs && durationMs > 0) {
+            subClearTimer = setTimeout(hideSubtitleText, durationMs);
+        }
+    }
+    function hideSubtitleText() {
+        clearTimeout(subClearTimer);
+        var el = subEl();
+        if (el) { el.textContent = ''; el.classList.add('hidden'); }
+    }
+
     var avPollTimer = null;
     var avLastDebugT = 0, avLastDebugPos = 0;
     var avStuckChecks = 0;          // consecutive 500ms polls with no advance
@@ -167,6 +196,14 @@ var Player = (function () {
                 onerrormsg:          function (c, m) {
                     if (onFallback) { onFallback('runtime: ' + (m || c)); return; }
                     emit('onerror', m || c);
+                },
+                onsubtitlechange:    function (duration, text /*, type, attr */) {
+                    showSubtitleText(text, duration);
+                },
+                /* Also support the alternate "onSubtitleEvent" name used by
+                 * some firmwares; harmless if not called. */
+                onSubtitleEvent:     function (duration, text) {
+                    showSubtitleText(text, duration);
                 }
             });
         } catch (e) {}
@@ -350,6 +387,7 @@ var Player = (function () {
     }
     function stop() {
         clearTimeout(h5OpenWatchdog);
+        hideSubtitleText();
         // Always fully tear down BOTH backends — some firmwares leave the
         // hidden one alive (auto-replaying audio on view switch).
         var v = h5el();
@@ -458,6 +496,10 @@ var Player = (function () {
                 for (var i = 0; i < info.length; i++) {
                     var t = info[i];
                     var parsed = parseAvExtraInfo(t.extra_info);
+                    // VIDEO tracks: do not show in the picker.  AVPlay also
+                    // returns these from getTotalTrackInfo and we don't want
+                    // an entry like "h264" misclassified as a subtitle.
+                    if (t.type === 'VIDEO') continue;
                     if (t.type === 'AUDIO') {
                         out.audio.push({
                             index: t.index,
@@ -465,7 +507,7 @@ var Player = (function () {
                             lang:  parsed.lang || '',
                             type:  'AVPLAY'
                         });
-                    } else {
+                    } else if (t.type === 'TEXT' || t.type === 'SUBTITLE') {
                         out.subtitle.push({
                             index: t.index,
                             name:  parsed.label || ('Subtitle ' + t.index),
@@ -473,6 +515,7 @@ var Player = (function () {
                             type:  'AVPLAY'
                         });
                     }
+                    // Anything else (DRM, METADATA, etc.) is ignored.
                 }
             } catch (e) {}
             return out;
@@ -538,6 +581,15 @@ var Player = (function () {
 
     function setSubtitleTrack(index) {
         if (backend === BACKEND_AVPLAY) {
+            // Clear the on-screen overlay before switching so an old cue
+            // doesn't linger past the change.
+            hideSubtitleText();
+            if (index < 0 || index === undefined) {
+                // "Off" — try disabling via the firmware's preferred API.
+                try { av().setSilentSubtitle(true); } catch (e) {}
+                return;
+            }
+            try { av().setSilentSubtitle(false); } catch (e) {}
             try { av().setSelectTrack('TEXT', index); }
             catch (e) { try { av().setSelectTrack('SUBTITLE', index); } catch (e2) {} }
             return;
