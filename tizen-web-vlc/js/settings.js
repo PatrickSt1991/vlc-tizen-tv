@@ -7,9 +7,10 @@
 var Settings = (function () {
     var KEY = 'vlctv_settings_v1';
     var defaults = {
-        audioLang:    '',      // '' = auto (use file's default), or ISO code
-        subtitleLang: 'off',   // 'off' = no subs, '' = auto-pick first, or ISO code
-        repeatMode:   'off'    // 'off' | 'one'
+        audioLang:        '',      // '' = auto (use file's default), or ISO code
+        subtitleLang:     'off',   // 'off' = no subs, '' = auto-pick first, or ISO code
+        repeatMode:       'off',   // 'off' | 'one'
+        showEmbeddedSubs: false    // expose AVPlay's embedded TEXT tracks in CC menu
     };
     var cache = null;
 

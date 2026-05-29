@@ -629,6 +629,11 @@ var Player = (function () {
         var out = { audio: [], subtitle: [{ index: -1, name: 'Off', off: true, active: false }] };
 
         if (backend === BACKEND_AVPLAY) {
+            // Off by default — see player.js header note.  User can flip this
+            // in Settings if they have a file with usable embedded subs and
+            // no external SRT sibling.
+            var showEmbed = (typeof Settings !== 'undefined') &&
+                            Settings.get('showEmbeddedSubs');
             try {
                 var info = av().getTotalTrackInfo();
                 for (var i = 0; i < info.length; i++) {
@@ -642,16 +647,18 @@ var Player = (function () {
                             lang:  parsed.lang || '',
                             type:  'AVPLAY'
                         });
+                    } else if ((t.type === 'TEXT' || t.type === 'SUBTITLE') && showEmbed) {
+                        out.subtitle.push({
+                            index: 'embed:' + t.index,
+                            name:  '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
+                            lang:  parsed.lang || '',
+                            type:  'AVPLAY_EMBED'
+                        });
                     }
-                    /* Embedded TEXT/SUBTITLE tracks from getTotalTrackInfo are
-                     * NOT listed.  On Tizen 5.0 AVPlay only fires SUB cb for
-                     * the first cue and never updates, so embedded subs would
-                     * appear in the menu but fail past the first cue —
-                     * confusing UX.  External SRT siblings below render via
-                     * our reliable time-poller. */
                 }
             } catch (e) {}
-            // External sibling subtitle files — the reliable rendering path
+            // External sibling subtitle files — always listed; this is the
+            // reliable rendering path on this firmware.
             for (var k = 0; k < playerSubtitles.length; k++) {
                 var s = playerSubtitles[k];
                 out.subtitle.push({

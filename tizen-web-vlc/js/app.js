@@ -125,6 +125,7 @@
             case 'setting-audio-lang':    openLangPicker('audioLang',    'Preferred audio language', LanguageList.forAudio());    break;
             case 'setting-subtitle-lang': openLangPicker('subtitleLang', 'Preferred subtitle language', LanguageList.forSubtitle()); break;
             case 'setting-repeat-mode':   openRepeatPicker(); break;
+            case 'setting-embedded-subs': openEmbeddedSubsPicker(); break;
             case 'close-picker':       closePicker(); break;
         }
     }
@@ -428,6 +429,7 @@
         document.getElementById('setting-audio-lang-value').textContent    = LanguageList.nameFor(Settings.get('audioLang'));
         document.getElementById('setting-subtitle-lang-value').textContent = LanguageList.nameFor(Settings.get('subtitleLang'));
         document.getElementById('setting-repeat-mode-value').textContent   = (Settings.get('repeatMode') === 'one') ? 'Repeat one' : 'Off';
+        document.getElementById('setting-embedded-subs-value').textContent = Settings.get('showEmbeddedSubs') ? 'On' : 'Off';
         // Mirror repeat state to the OSD button if visible
         updateRepeatButton();
     }
@@ -522,6 +524,18 @@
             Settings.set('repeatMode', val);
             refreshSettingsValues();
             UI.toast('Repeat: ' + (val === 'one' ? 'On' : 'Off'));
+        });
+    }
+    function openEmbeddedSubsPicker() {
+        pickerSetting = 'showEmbeddedSubs';
+        var cur = Settings.get('showEmbeddedSubs') ? 'on' : 'off';
+        openPicker('Show embedded subtitles in CC menu', [
+            { code: 'off', name: 'Off — only external SRT/VTT files (recommended)' },
+            { code: 'on',  name: 'On — also list embedded MKV/MP4 subtitle tracks' }
+        ], cur, function (val) {
+            Settings.set('showEmbeddedSubs', val === 'on');
+            refreshSettingsValues();
+            UI.toast('Embedded subtitles: ' + (val === 'on' ? 'On' : 'Off'));
         });
     }
 
