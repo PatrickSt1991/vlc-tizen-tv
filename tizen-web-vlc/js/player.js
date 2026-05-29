@@ -296,7 +296,11 @@ var Player = (function () {
             if (typeof Debug !== 'undefined')
                 Debug.player('SUB cb dur=' + duration + ' type=' + type +
                              ' text=' + JSON.stringify(text || '').slice(0, 80));
-            showSubtitleText(text, duration);
+            /* DO NOT paint our overlay from this callback.  AVPlay renders
+             * the embedded subtitle natively on its video plane — painting
+             * our overlay too would double the text.  Our overlay is
+             * exclusively for the external-SRT time-poller, which silences
+             * AVPlay via setSilentSubtitle(true) before painting. */
         };
 
         try {
