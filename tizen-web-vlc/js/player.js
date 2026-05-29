@@ -586,9 +586,9 @@ var Player = (function () {
         });
     }
 
-    /* Convert a subtitle file (.vtt or .srt) to a VTT Blob URL the <track>
-     * element can load.  Tizen's filesystem reads the file as text, we convert
-     * SRT timing/numbering to VTT format and prepend the "WEBVTT" header. */
+    /* Convert a subtitle file (.vtt / .srt / .ass / .ssa / .smi / .sami) to
+     * a WebVTT Blob URL the <track> element can load.  All converters live
+     * in this file — no external deps. */
     function loadSubtitleAsVTT(sub, cb) {
         if (typeof Browser === 'undefined' || !Browser.readSubtitleText) {
             cb(new Error('Browser.readSubtitleText not available'));
@@ -597,37 +597,143 @@ var Player = (function () {
         Browser.readSubtitleText(sub, function (err, text) {
             if (err) { cb(err); return; }
             var vtt;
-            if (sub.ext === 'vtt') {
-                vtt = text;
-            } else if (sub.ext === 'srt') {
-                vtt = srtToVtt(text);
-            } else {
-                cb(new Error('unsupported subtitle ext: ' + sub.ext));
-                return;
+            switch (sub.ext) {
+                case 'vtt':                 vtt = text;            break;
+                case 'srt':                 vtt = srtToVtt(text);  break;
+                case 'ass':
+                case 'ssa':                 vtt = assToVtt(text);  break;
+                case 'smi':
+                case 'sami':                vtt = smiToVtt(text);  break;
+                default:
+                    cb(new Error('unsupported subtitle ext: ' + sub.ext));
+                    return;
             }
             try {
                 var blob = new Blob([vtt], { type: 'text/vtt' });
-                var url  = URL.createObjectURL(blob);
-                cb(null, url);
+                cb(null, URL.createObjectURL(blob));
             } catch (e) { cb(e); }
         });
     }
 
+    /* SRT → VTT: re-stamp the comma-decimal timecodes to dot-decimal, strip
+     * numeric cue indices.  Header is the literal "WEBVTT". */
     function srtToVtt(srt) {
-        // SRT: "00:00:01,234 --> 00:00:05,678"   VTT: "00:00:01.234 --> 00:00:05.678"
-        // SRT also numbers cues; VTT doesn't require numbering (the browser ignores it
-        // if there) but stripping is cleaner.
         var lines = srt.replace(/\r/g, '').split('\n');
         var out = ['WEBVTT', ''];
         for (var i = 0; i < lines.length; i++) {
             var l = lines[i];
-            // Skip pure-numeric cue index lines
-            if (/^\d+\s*$/.test(l)) continue;
-            // Convert timing
-            l = l.replace(/(\d\d:\d\d:\d\d),(\d{3})/g, '$1.$2');
+            if (/^\d+\s*$/.test(l)) continue;                   // numeric index
+            l = l.replace(/(\d\d:\d\d:\d\d),(\d{3})/g, '$1.$2'); // commas → dots
             out.push(l);
         }
         return out.join('\n');
+    }
+
+    /* ASS / SSA → VTT.  Drops styling, layers, fonts, override tags
+     * ({\an8} etc.) — keeps only the dialogue text and timestamps.  ASS
+     * dialogue lines:
+     *   Dialogue: Layer, Start, End, Style, Name, ML, MR, MV, Effect, Text
+     * Times look like "H:MM:SS.cc" (centiseconds). */
+    function assToVtt(ass) {
+        var lines = ass.replace(/\r/g, '').split('\n');
+        var out = ['WEBVTT', ''];
+        var fmt = null;
+        var inEvents = false;
+
+        for (var i = 0; i < lines.length; i++) {
+            var raw = lines[i];
+            var l = raw.trim();
+            if (l.charAt(0) === '[' && l.charAt(l.length - 1) === ']') {
+                inEvents = (l.toLowerCase() === '[events]');
+                continue;
+            }
+            if (!inEvents) continue;
+
+            if (l.toLowerCase().indexOf('format:') === 0) {
+                fmt = l.substring(7).split(',').map(function (s) { return s.trim().toLowerCase(); });
+                continue;
+            }
+            if (l.toLowerCase().indexOf('dialogue:') !== 0 || !fmt) continue;
+
+            // Split into the format fields, keeping the rest as the Text field
+            var rest = l.substring(9).trim();
+            var parts = [];
+            var idx = 0;
+            for (var k = 0; k < fmt.length - 1; k++) {
+                var comma = rest.indexOf(',', idx);
+                if (comma < 0) break;
+                parts.push(rest.substring(idx, comma));
+                idx = comma + 1;
+            }
+            parts.push(rest.substring(idx));
+
+            var startIdx = fmt.indexOf('start');
+            var endIdx   = fmt.indexOf('end');
+            var textIdx  = fmt.indexOf('text');
+            if (startIdx < 0 || endIdx < 0 || textIdx < 0) continue;
+
+            var start = assTimeToVtt(parts[startIdx].trim());
+            var end   = assTimeToVtt(parts[endIdx].trim());
+            var text  = (parts[textIdx] || '')
+                .replace(/\{[^}]*\}/g, '')   // override tags {\b1} etc.
+                .replace(/\\N/g, '\n')       // hard line break
+                .replace(/\\n/g, '\n')       // soft line break
+                .replace(/\\h/g, ' ')        // hard space
+                .replace(/<[^>]+>/g, '');    // any HTML
+
+            if (!start || !end || !text.trim()) continue;
+            out.push(start + ' --> ' + end);
+            out.push(text);
+            out.push('');
+        }
+        return out.join('\n');
+    }
+    function assTimeToVtt(t) {
+        // H:MM:SS.cc  →  HH:MM:SS.mmm   (centiseconds → milliseconds)
+        var m = /^(\d+):(\d{2}):(\d{2})[.,](\d{2,3})$/.exec(t);
+        if (!m) return null;
+        var h = parseInt(m[1], 10);
+        var ms = m[4].length === 2 ? m[4] + '0' : m[4];
+        return (h < 10 ? '0' + h : h) + ':' + m[2] + ':' + m[3] + '.' + ms;
+    }
+
+    /* SMI / SAMI → VTT.  SAMI is HTML-ish; each <SYNC Start=N> sets the
+     * start of a cue in milliseconds.  The cue's text continues until the
+     * next <SYNC>.  '&nbsp;' alone means "blank out the previous cue". */
+    function smiToVtt(smi) {
+        var out = ['WEBVTT', ''];
+        var re = /<sync\s+start\s*=\s*["']?(\d+)["']?[^>]*>([\s\S]*?)(?=<sync\b|<\/body>|$)/gi;
+        var cues = [];
+        var m;
+        while ((m = re.exec(smi)) !== null) {
+            var time = parseInt(m[1], 10);
+            var text = m[2]
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<[^>]+>/g, '')
+                .replace(/&nbsp;/gi, '')
+                .replace(/&amp;/gi,  '&')
+                .replace(/&lt;/gi,   '<')
+                .replace(/&gt;/gi,   '>')
+                .replace(/&quot;/gi, '"')
+                .trim();
+            cues.push({ time: time, text: text });
+        }
+        for (var i = 0; i < cues.length; i++) {
+            if (!cues[i].text) continue;
+            var nextTime = cues[i + 1] ? cues[i + 1].time : (cues[i].time + 5000);
+            out.push(msToVttTime(cues[i].time) + ' --> ' + msToVttTime(nextTime));
+            out.push(cues[i].text);
+            out.push('');
+        }
+        return out.join('\n');
+    }
+    function msToVttTime(ms) {
+        var h   = Math.floor(ms / 3600000); ms -= h * 3600000;
+        var min = Math.floor(ms / 60000);   ms -= min * 60000;
+        var s   = Math.floor(ms / 1000);    ms -= s * 1000;
+        var p2 = function (n) { return n < 10 ? '0' + n : '' + n; };
+        var p3 = function (n) { return n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n; };
+        return p2(h) + ':' + p2(min) + ':' + p2(s) + '.' + p3(ms);
     }
 
     return {

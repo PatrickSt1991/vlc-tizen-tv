@@ -18,7 +18,10 @@ var Browser = (function () {
         // Playlists / streams
         'm3u','m3u8','mpd','pls'
     ];
-    var SUBTITLE_EXTS = ['vtt', 'srt'];
+    // Text-based subtitle formats we can convert to WebVTT on the fly.
+    // Image-based subs (.sub/.idx VobSub, .sup PGS, DVD streams) aren't
+    // representable in HTML5 <track> at all and are deliberately omitted.
+    var SUBTITLE_EXTS = ['vtt', 'srt', 'ass', 'ssa', 'smi', 'sami'];
 
     function ext(name) {
         var dot = name.lastIndexOf('.');
