@@ -737,18 +737,43 @@
         // Subtitle: 'off' explicit, '' auto (no action), code → match
         if (prefSub === 'off') {
             Player.setSubtitleTrack(-1);
+            if (typeof Debug !== 'undefined') Debug.player('subtitle pref: off (silent)');
         } else if (prefSub) {
+            var wantSub = prefSub.toLowerCase();
+            // Score each candidate so we can prefer external SRT/VTT files
+            // over AVPlay's embedded (often broken) subtitle tracks.
+            var bestMatch = null;
+            var bestScore = 0;
             for (var j = 0; j < tracks.subtitle.length; j++) {
                 var st = tracks.subtitle[j];
                 if (st.off) continue;
-                var sn = (st.name || '').toLowerCase();
-                if (sn.indexOf(prefSub.toLowerCase()) >= 0 ||
-                    sn.indexOf('[' + prefSub.toLowerCase() + ']') >= 0) {
-                    Player.setSubtitleTrack(st.index);
-                    if (typeof Debug !== 'undefined') Debug.player('applied subtitle pref ' + prefSub + ' → ' + st.name);
-                    break;
-                }
+                var sn   = (st.name || '').toLowerCase();
+                var lang = (st.lang || '').toLowerCase();
+
+                var sc = 0;
+                if      (lang === wantSub)                                                sc = 100;
+                else if (lang && wantSub.length === 2 && lang.indexOf(wantSub) === 0)     sc = 90;
+                else if (lang && lang.length    === 2 && wantSub.indexOf(lang)    === 0)  sc = 90;
+                else if (sn.indexOf('[' + wantSub + ']') >= 0)                            sc = 80;
+                else if (sn.indexOf(wantSub) >= 0)                                        sc = 50;
+                else continue;
+
+                // External subs are reliable on this firmware; embedded ones
+                // often aren't.  Bump externals so they win ties.
+                if (st.type === 'AVPLAY_EXTERNAL' || st.type === 'HTML5_EXTERNAL') sc += 15;
+
+                if (sc > bestScore) { bestScore = sc; bestMatch = st; }
             }
+            if (bestMatch) {
+                Player.setSubtitleTrack(bestMatch.index);
+                if (typeof Debug !== 'undefined')
+                    Debug.player('applied subtitle pref ' + prefSub + ' → ' + bestMatch.name + ' (score ' + bestScore + ')');
+            } else if (typeof Debug !== 'undefined') {
+                Debug.player('subtitle pref ' + prefSub + ': no matching track in ' +
+                             tracks.subtitle.map(function (x) { return x.name; }).join(' / '));
+            }
+        } else if (typeof Debug !== 'undefined') {
+            Debug.player('subtitle pref: auto (no preference set)');
         }
     }
 
