@@ -184,6 +184,13 @@ var Player = (function () {
             emit('onerror', 'AVPlay open(): ' + (e.message || e));
             return;
         }
+        var subListener = function (duration, text, type, attr) {
+            if (typeof Debug !== 'undefined')
+                Debug.player('SUB cb dur=' + duration + ' type=' + type +
+                             ' text=' + JSON.stringify(text || '').slice(0, 80));
+            showSubtitleText(text, duration);
+        };
+
         try {
             av().setListener({
                 onbufferingstart:    function () { emit('onbuffering', true); },
@@ -197,16 +204,28 @@ var Player = (function () {
                     if (onFallback) { onFallback('runtime: ' + (m || c)); return; }
                     emit('onerror', m || c);
                 },
-                onsubtitlechange:    function (duration, text /*, type, attr */) {
-                    showSubtitleText(text, duration);
-                },
-                /* Also support the alternate "onSubtitleEvent" name used by
-                 * some firmwares; harmless if not called. */
-                onSubtitleEvent:     function (duration, text) {
-                    showSubtitleText(text, duration);
+                onsubtitlechange: subListener,
+                /* Some firmwares use the alternate name "onSubtitleEvent". */
+                onSubtitleEvent:  subListener,
+                /* Some firmwares deliver text subs through onevent with
+                 * eventType === 'PLAYER_MSG_FRAGMENT_INFO' or 'SUBTITLE'. */
+                onevent: function (eventType, eventData) {
+                    if (typeof Debug !== 'undefined')
+                        Debug.player('AV onevent ' + eventType + ' ' +
+                                     (typeof eventData === 'string' ? eventData.slice(0, 80) :
+                                      JSON.stringify(eventData || '').slice(0, 80)));
+                    if (/sub/i.test(String(eventType)) && eventData) {
+                        showSubtitleText(eventData, 5000);
+                    }
                 }
             });
         } catch (e) {}
+
+        /* Also assign the subtitle callback directly on the av object — some
+         * older Samsung TV firmwares require this older pattern in addition
+         * to setListener. Harmless if the firmware ignores it. */
+        try { av().onsubtitlechange = subListener; } catch (e) {}
+        try { av().onSubtitleEvent  = subListener; } catch (e) {}
 
         try {
             av().prepareAsync(
