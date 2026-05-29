@@ -1,13 +1,21 @@
-/* Player wrapper — auto-selects backend based on URL scheme.
+/* Player wrapper — auto-selects backend based on URL + container.
  *
- *   file:// or /opt/... (local files) → HTML5 <video>
- *      AVPlay's local-file pipeline is broken on Samsung TV 5.0 (it opens,
- *      reports PLAYING, but never decodes).  The WebView's chromium media
- *      stack handles file:// fine and shares the same hardware decoders.
+ *   Local .mkv files → Samsung AVPlay
+ *      MKV multiplexes alternate audio tracks that the HTML5 <video>
+ *      element on Tizen 5.0 chromium will not enumerate or switch.
+ *      AVPlay's getTotalTrackInfo / setSelectTrack DO work for MKV, so
+ *      we route MKVs through it.  NB: AVPlay needs a raw filesystem path
+ *      (no `file://` scheme) — see avplayUrl() below.  If AVPlay fails
+ *      to open or doesn't actually decode, we silently fall back to
+ *      HTML5 so non-MKV-savvy firmwares still play *something*.
+ *
+ *   Other local files (mp4, webm, …) → HTML5 <video>
+ *      AVPlay's local-file pipeline was historically broken on Tizen
+ *      5.0 for these (opens, reports PLAYING, never decodes).  The
+ *      WebView's chromium media stack handles them fine.
  *
  *   http / https / rtsp / rtmp / .m3u8 / .mpd → Samsung AVPlay
- *      Hardware-accelerated, supports HLS, DASH, RTSP, etc.  Proven on
- *      this firmware.
+ *      Hardware-accelerated, supports HLS, DASH, RTSP, etc.
  */
 
 var Player = (function () {
@@ -21,8 +29,28 @@ var Player = (function () {
     function isLocalUrl(url) {
         return /^file:\/\//.test(url) || /^\//.test(url);
     }
+    function isMkvUrl(url) {
+        var lower = String(url || '').toLowerCase().split('?')[0];
+        return /\.mkv$/.test(lower);
+    }
     function pickBackend(url) {
-        return isLocalUrl(url) ? BACKEND_HTML5 : BACKEND_AVPLAY;
+        if (!isLocalUrl(url))          return BACKEND_AVPLAY;
+        if (isMkvUrl(url))             return BACKEND_AVPLAY;   // see header comment
+        return BACKEND_HTML5;
+    }
+
+    /* AVPlay on Tizen 5.0 rejects `file://` URIs — it wants a raw
+     * absolute filesystem path, percent-decoded.  Network URLs pass
+     * through untouched.  Browser.js currently hands us paths via
+     * Tizen's File.toURI(), which yields `file:///opt/media/...`, so
+     * we normalize here in one place. */
+    function avplayUrl(url) {
+        var s = String(url || '');
+        if (s.indexOf('file://') === 0) {
+            s = s.slice(7);
+            try { s = decodeURIComponent(s); } catch (e) {}
+        }
+        return s;
     }
 
     /* ── Listener fanout ───────────────────────────────────────────────── */
@@ -66,9 +94,12 @@ var Player = (function () {
 
     var avPollTimer = null;
     var avLastDebugT = 0, avLastDebugPos = 0;
-    function avStartPolling() {
+    var avStuckChecks = 0;          // consecutive 500ms polls with no advance
+    var AV_STUCK_THRESHOLD = 16;    // 16 × 500ms = 8s of frozen PLAYING → bail
+    function avStartPolling(onFallback) {
         avStopPolling();
-        avLastDebugT = 0; avLastDebugPos = 0;
+        avLastDebugT = 0; avLastDebugPos = 0; avStuckChecks = 0;
+        var fallbackFired = false;
         avPollTimer = setInterval(function () {
             try {
                 var s = av().getState();
@@ -82,6 +113,22 @@ var Player = (function () {
                     Debug.player('AV progress state=' + s + ' time=' + t + 'ms dur=' + d + 'ms' + stuck);
                     avLastDebugT = now; avLastDebugPos = t;
                 }
+                /* Watchdog: AVPlay sometimes reports PLAYING for a local
+                 * file but never actually decodes a frame.  After ~8s of
+                 * t==0 while state=PLAYING, give up and let the caller
+                 * fall back to the HTML5 backend. */
+                if (onFallback && !fallbackFired && s === 'PLAYING' && t === 0) {
+                    avStuckChecks++;
+                    if (avStuckChecks >= AV_STUCK_THRESHOLD) {
+                        fallbackFired = true;
+                        if (typeof Debug !== 'undefined')
+                            Debug.error('AV stuck at t=0 for ' + (AV_STUCK_THRESHOLD*500) + 'ms — falling back');
+                        avStopPolling();
+                        onFallback('no decode progress');
+                    }
+                } else if (t > 0) {
+                    avStuckChecks = 0;
+                }
             } catch (e) {}
         }, 500);
     }
@@ -89,13 +136,21 @@ var Player = (function () {
         if (avPollTimer) { clearInterval(avPollTimer); avPollTimer = null; }
     }
 
-    function avOpen(url) {
-        if (!av()) { emit('onerror', 'AVPlay API not available'); return; }
+    function avOpen(url, onFallback) {
+        if (!av()) {
+            if (onFallback) { onFallback('AVPlay API not available'); return; }
+            emit('onerror', 'AVPlay API not available'); return;
+        }
+        var path = avplayUrl(url);
+        if (typeof Debug !== 'undefined') Debug.player('AV open path=' + path);
+
         try { av().close(); } catch (e) {}
         try {
-            av().open(url);
+            av().open(path);
             if (typeof Debug !== 'undefined') Debug.player('AV open() returned');
         } catch (e) {
+            if (typeof Debug !== 'undefined') Debug.error('AV open() threw: ' + (e.message || e));
+            if (onFallback) { onFallback('open: ' + (e.message || e)); return; }
             emit('onerror', 'AVPlay open(): ' + (e.message || e));
             return;
         }
@@ -104,8 +159,14 @@ var Player = (function () {
                 onbufferingstart:    function () { emit('onbuffering', true); },
                 onbufferingcomplete: function () { emit('onbuffering', false); },
                 onstreamcompleted:   function () { emit('oncomplete'); },
-                onerror:             function (e) { emit('onerror', e); },
-                onerrormsg:          function (c, m) { emit('onerror', m || c); }
+                onerror:             function (e) {
+                    if (onFallback) { onFallback('runtime: ' + (e && e.message || e)); return; }
+                    emit('onerror', e);
+                },
+                onerrormsg:          function (c, m) {
+                    if (onFallback) { onFallback('runtime: ' + (m || c)); return; }
+                    emit('onerror', m || c);
+                }
             });
         } catch (e) {}
 
@@ -115,14 +176,23 @@ var Player = (function () {
                     avSetDisplayRect();
                     avSetDisplayMethod();
                     try { av().play(); } catch (e) {}
-                    avStartPolling();
+                    avStartPolling(onFallback);
                     emit('onstatechange', 'playing');
                 },
-                function (err) { emit('onerror', 'prepare failed: ' + (err && err.message ? err.message : err)); }
+                function (err) {
+                    var msg = err && err.message ? err.message : err;
+                    if (typeof Debug !== 'undefined') Debug.error('AV prepareAsync failed: ' + msg);
+                    if (onFallback) { onFallback('prepare: ' + msg); return; }
+                    emit('onerror', 'prepare failed: ' + msg);
+                }
             );
         } catch (e) {
-            try { av().prepare(); av().play(); avStartPolling(); emit('onstatechange', 'playing'); }
-            catch (e2) { emit('onerror', 'prepare failed: ' + (e2.message || e2)); }
+            try { av().prepare(); av().play(); avStartPolling(onFallback); emit('onstatechange', 'playing'); }
+            catch (e2) {
+                if (typeof Debug !== 'undefined') Debug.error('AV prepare() threw: ' + (e2.message || e2));
+                if (onFallback) { onFallback('prepare: ' + (e2.message || e2)); return; }
+                emit('onerror', 'prepare failed: ' + (e2.message || e2));
+            }
         }
     }
 
@@ -242,7 +312,25 @@ var Player = (function () {
             if (v) v.style.display = 'none';
             var po2 = document.getElementById('player-object');
             if (po2) po2.style.display = 'block';
-            avOpen(url);
+
+            // For local files routed to AVPlay (currently: .mkv), supply a
+            // fallback so we degrade gracefully to HTML5 if AVPlay can't
+            // open the path or never actually decodes. Network URLs get
+            // no fallback — they surface errors normally.
+            if (isLocalUrl(url)) {
+                avOpen(url, function (reason) {
+                    if (typeof Debug !== 'undefined')
+                        Debug.player('AV local-file fallback → HTML5: ' + reason);
+                    try { if (av()) av().close(); } catch (e) {}
+                    avStopPolling();
+                    if (po2) po2.style.display = 'none';
+                    backend = BACKEND_HTML5;
+                    if (v) v.style.display = 'block';
+                    h5Open(url, opts);
+                });
+            } else {
+                avOpen(url);
+            }
         }
     }
 
@@ -328,6 +416,30 @@ var Player = (function () {
         if (backend === BACKEND_AVPLAY) avSetDisplayRect();
     }
 
+    /* AVPlay's extra_info field is a JSON string with fields like
+     *   { "language":"eng", "channels":2, "fourCC":"AAC", ... }
+     * for audio, and similar for subtitles.  Older firmwares hand back
+     * a plain string instead.  Return a {label, lang} pair either way. */
+    function parseAvExtraInfo(raw) {
+        if (!raw) return { label: '', lang: '' };
+        var s = String(raw).trim();
+        var obj = null;
+        if (s.charAt(0) === '{') {
+            try { obj = JSON.parse(s); } catch (e) {}
+        }
+        if (!obj) {
+            // Not JSON — use as-is, and look for a 3-letter ISO code in it
+            var m = s.match(/\b([a-z]{2,3})\b/i);
+            return { label: s, lang: m ? m[1].toLowerCase() : '' };
+        }
+        var lang = (obj.language || obj.lang || '').toString().toLowerCase();
+        var parts = [];
+        if (lang) parts.push(lang.toUpperCase());
+        if (obj.fourCC)   parts.push(obj.fourCC);
+        if (obj.channels) parts.push(obj.channels + 'ch');
+        return { label: parts.join(' · ') || s, lang: lang };
+    }
+
     /* ── Track info ─────────────────────────────────────────────────────
      *
      * For AVPlay (HTTP streams): native enumeration via getTotalTrackInfo().
@@ -344,10 +456,22 @@ var Player = (function () {
                 var info = av().getTotalTrackInfo();
                 for (var i = 0; i < info.length; i++) {
                     var t = info[i];
-                    if (t.type === 'AUDIO')
-                        out.audio.push({ index: t.index, name: t.extra_info || ('Audio ' + t.index), type: 'AVPLAY' });
-                    else
-                        out.subtitle.push({ index: t.index, name: t.extra_info || ('Subtitle ' + t.index), type: 'AVPLAY' });
+                    var parsed = parseAvExtraInfo(t.extra_info);
+                    if (t.type === 'AUDIO') {
+                        out.audio.push({
+                            index: t.index,
+                            name:  parsed.label || ('Audio ' + t.index),
+                            lang:  parsed.lang || '',
+                            type:  'AVPLAY'
+                        });
+                    } else {
+                        out.subtitle.push({
+                            index: t.index,
+                            name:  parsed.label || ('Subtitle ' + t.index),
+                            lang:  parsed.lang || '',
+                            type:  'AVPLAY'
+                        });
+                    }
                 }
             } catch (e) {}
             return out;

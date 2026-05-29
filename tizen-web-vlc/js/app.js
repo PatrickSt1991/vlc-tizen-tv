@@ -716,10 +716,17 @@
 
         // Audio: only act if user has a non-empty preference
         if (prefAudio) {
+            var want = prefAudio.toLowerCase();
             for (var i = 0; i < tracks.audio.length; i++) {
                 var t = tracks.audio[i];
-                var nm = (t.name || '').toLowerCase();
-                if (nm.indexOf(prefAudio.toLowerCase()) >= 0) {
+                var lang = (t.lang || '').toLowerCase();
+                var nm   = (t.name || '').toLowerCase();
+                // Match on explicit lang field first (ISO 2 or 3 letter),
+                // then fall back to substring match on the display name.
+                if (lang === want ||
+                    (lang && want.length === 2 && lang.indexOf(want) === 0) ||
+                    (lang && lang.length === 2 && want.indexOf(lang) === 0) ||
+                    nm.indexOf(want) >= 0) {
                     Player.setAudioTrack(t.index);
                     if (typeof Debug !== 'undefined') Debug.player('applied audio pref ' + prefAudio + ' → ' + t.name);
                     break;
