@@ -1,21 +1,19 @@
-/* Player wrapper — auto-selects backend based on URL + container.
+/* Player wrapper — AVPlay first, HTML5 as fallback for local files.
  *
- *   Local .mkv files → Samsung AVPlay
- *      MKV multiplexes alternate audio tracks that the HTML5 <video>
- *      element on Tizen 5.0 chromium will not enumerate or switch.
- *      AVPlay's getTotalTrackInfo / setSelectTrack DO work for MKV, so
- *      we route MKVs through it.  NB: AVPlay needs a raw filesystem path
- *      (no `file://` scheme) — see avplayUrl() below.  If AVPlay fails
- *      to open or doesn't actually decode, we silently fall back to
- *      HTML5 so non-MKV-savvy firmwares still play *something*.
- *
- *   Other local files (mp4, webm, …) → HTML5 <video>
- *      AVPlay's local-file pipeline was historically broken on Tizen
- *      5.0 for these (opens, reports PLAYING, never decodes).  The
- *      WebView's chromium media stack handles them fine.
- *
- *   http / https / rtsp / rtmp / .m3u8 / .mpd → Samsung AVPlay
- *      Hardware-accelerated, supports HLS, DASH, RTSP, etc.
+ * Backend selection:
+ *   - All URLs (local + network) try Samsung AVPlay first.  AVPlay sees
+ *     embedded audio + subtitle tracks in MKV / MP4 / TS / etc., supports
+ *     HLS / DASH / RTSP, and uses the same hardware decoder.
+ *   - For local files, we wire a fallback callback into avOpen().  If
+ *     AVPlay can't open the file, prepareAsync rejects, the runtime
+ *     listener fires onerror, or AVPlay reports PLAYING but never decodes
+ *     a frame within 8 s, we silently swap to the HTML5 <video> element
+ *     and replay from there.  Net result: every file that worked in HTML5
+ *     before still works (just with an 8 s delay when AVPlay can't handle
+ *     it), and any container AVPlay can decode gains track-switching for
+ *     free.
+ *   - Path normalization: AVPlay rejects `file://` URIs and wants a raw
+ *     absolute filesystem path, percent-decoded.  Handled by avplayUrl().
  */
 
 var Player = (function () {
@@ -33,10 +31,11 @@ var Player = (function () {
         var lower = String(url || '').toLowerCase().split('?')[0];
         return /\.mkv$/.test(lower);
     }
+    /* Try AVPlay first for everything.  Local files get a fallback to
+     * HTML5 wired up in open() so we degrade gracefully on containers
+     * AVPlay can't decode. */
     function pickBackend(url) {
-        if (!isLocalUrl(url))          return BACKEND_AVPLAY;
-        if (isMkvUrl(url))             return BACKEND_AVPLAY;   // see header comment
-        return BACKEND_HTML5;
+        return BACKEND_AVPLAY;
     }
 
     /* AVPlay on Tizen 5.0 rejects `file://` URIs — it wants a raw
@@ -95,7 +94,9 @@ var Player = (function () {
     var avPollTimer = null;
     var avLastDebugT = 0, avLastDebugPos = 0;
     var avStuckChecks = 0;          // consecutive 500ms polls with no advance
-    var AV_STUCK_THRESHOLD = 16;    // 16 × 500ms = 8s of frozen PLAYING → bail
+    var AV_STUCK_THRESHOLD = 10;    // 10 × 500ms = 5s of frozen PLAYING → bail
+                                    // (was 8s; reduced since AVPlay tries every
+                                    //  local file now, not just MKV)
     function avStartPolling(onFallback) {
         avStopPolling();
         avLastDebugT = 0; avLastDebugPos = 0; avStuckChecks = 0;
