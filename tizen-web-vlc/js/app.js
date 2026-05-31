@@ -90,6 +90,14 @@
             UI.toast('Playback finished');
             backToHome();
         });
+        Player.setListener('onsubsupdated', function () {
+            // MP4 embedded-sub extraction completed.  If the CC menu is
+            // currently open, re-render it so the new entries appear.
+            var menu = document.getElementById('track-menu');
+            if (menu && !menu.classList.contains('hidden')) {
+                openTrackMenu();
+            }
+        });
 
         // Reflow display rect on size changes
         window.addEventListener('resize', Player.setDisplayRect);
