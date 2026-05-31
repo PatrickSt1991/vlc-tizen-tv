@@ -272,21 +272,24 @@ var Player = (function () {
         el.classList.remove('hidden');
         clearTimeout(subClearTimer);
 
-        /* AVPlay reports cue duration in MICROSECONDS on Tizen 5.0, not
-         * milliseconds.  An SRT cue with 0:00.000 → 0:03.500 (3500 ms) is
-         * delivered as duration=3500000.  Divide by 1000 to get ms.
-         * 0 (and absurd >5min values) means 'show until next cue'; we
-         * cap at 8s as a safety net so a single cue can't be stuck
-         * forever if AVPlay never fires the next SUB cb. */
+        /* AVPlay's `duration` parameter is inconsistent between firmwares
+         * and delivery paths:
+         *   - embedded TEXT track via setSelectTrack: microseconds
+         *     (3500 ms cue → 3500000)
+         *   - external SRT via setExternalSubtitlePath:  milliseconds
+         *     (3500 ms cue → 3500)
+         * Heuristic: a value below 100,000 is millisecond-units (a 100-second
+         * cue is already extreme), a value ≥ 100,000 must be microseconds.
+         * 0 means 'show until next cue' — AVPlay reliably sends a follow-up
+         * blank cue (text=" ", dur=0) to clear between cues, but we still
+         * add a safety timer in case the last cue at end-of-stream never
+         * gets one. */
         var d = 0;
         if (typeof durationMs === 'number' && durationMs > 0) {
-            d = durationMs >= 1000 ? Math.round(durationMs / 1000) : durationMs;
-            if (d > 300000) d = 0;       // > 5 minutes treated as 'no end given'
+            d = durationMs >= 100000 ? Math.round(durationMs / 1000) : durationMs;
         }
-        if (d > 30000) d = 8000;         // safety net
-        if (d > 0) {
-            subClearTimer = setTimeout(hideSubtitleText, d);
-        }
+        if (d <= 0 || d > 30000) d = 8000;   // safety net + upper bound
+        subClearTimer = setTimeout(hideSubtitleText, d);
     }
     function hideSubtitleText() {
         clearTimeout(subClearTimer);
