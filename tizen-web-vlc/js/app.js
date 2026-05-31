@@ -16,8 +16,29 @@
         catch (e) { return []; }
     }
     function pushRecent(item) {
-        var list = getRecent().filter(function (x) { return x.uri !== item.uri; });
-        list.unshift(item);
+        /* Subtitle entries carry a Tizen File object that won't survive
+         * JSON.stringify (it serializes to {}).  Keep only the plain
+         * fields needed to find the same sibling SRT on the next replay —
+         * Browser.readSubtitleText will lazily re-resolve the File from
+         * the path when it's actually needed.  Extracted-from-MP4 subs
+         * are skipped: they live in wgt-private-tmp with random names and
+         * get re-generated on next file open anyway. */
+        var subs = (item.subtitles || [])
+            .filter(function (s) { return s && !s._extracted; })
+            .map(function (s) {
+                return {
+                    name:     s.name,
+                    lang:     s.lang || '',
+                    ext:      s.ext  || '',
+                    fullPath: s.fullPath || '',
+                    uri:      s.uri || ''
+                };
+            });
+        var entry = { uri: item.uri, title: item.title };
+        if (subs.length) entry.subtitles = subs;
+
+        var list = getRecent().filter(function (x) { return x.uri !== entry.uri; });
+        list.unshift(entry);
         list = list.slice(0, 20);
         try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) {}
     }
@@ -249,7 +270,9 @@
             li.innerHTML = '<span class="icon">★</span>' +
                            '<span class="name">' + escapeHtml(item.title) + '</span>' +
                            '<span class="meta">' + escapeHtml(item.uri) + '</span>';
-            li.addEventListener('click', function () { playUri(item.uri, item.title); });
+            li.addEventListener('click', function () {
+                playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+            });
             ul.appendChild(li);
         });
         UI.refreshFocusables();
@@ -318,7 +341,7 @@
             }
         }, 1000);
 
-        pushRecent({ uri: uri, title: title || uri });
+        pushRecent({ uri: uri, title: title || uri, subtitles: opts.subtitles });
         scheduleOSDHide();
     }
 

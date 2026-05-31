@@ -226,11 +226,29 @@ var Browser = (function () {
         return '';
     }
 
-    /* Read a subtitle file's content as UTF-8 text via tizen.filesystem. */
+    /* Read a subtitle file's content as UTF-8 text via tizen.filesystem.
+     * Accepts entries with either a live Tizen File object on `.file` (the
+     * normal browse-then-play flow) or just a `.fullPath` string (recent-
+     * items replay, where the original File didn't survive JSON.stringify
+     * in localStorage).  In the latter case we resolve the path back to a
+     * File object first. */
     function readSubtitleText(subEntry, cb) {
-        if (!subEntry || !subEntry.file) { cb(new Error('no file')); return; }
+        if (!subEntry) { cb(new Error('no entry')); return; }
+        if (subEntry.file) { readFromFileObj(subEntry.file, cb); return; }
+        if (subEntry.fullPath) {
+            try {
+                tizen.filesystem.resolve(subEntry.fullPath,
+                    function (f) { readFromFileObj(f, cb); },
+                    function (e) { cb(e); },
+                    'r');
+            } catch (e) { cb(e); }
+            return;
+        }
+        cb(new Error('no file'));
+    }
+    function readFromFileObj(file, cb) {
         try {
-            subEntry.file.openStream('r',
+            file.openStream('r',
                 function (stream) {
                     try {
                         var text = stream.read(stream.bytesAvailable);

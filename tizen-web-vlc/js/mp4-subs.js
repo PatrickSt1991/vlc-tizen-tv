@@ -301,6 +301,13 @@ var Mp4Subs = (function () {
      * Reads the whole file as ArrayBuffer via XHR.  For large files we could
      * later switch to Range-request partial reads, but for ≤2 GB MP4s this
      * is simple and correct. */
+    /* Hard cap on whole-file loading.  Anything bigger gets skipped — we'd
+     * blow the TV's RAM trying to ArrayBuffer a 4 GB movie.  Proper fix is
+     * Range-based partial reads (moov + per-sample mdat ranges) but that
+     * needs to be validated against Tizen Chromium's file:// behaviour
+     * first.  TODO: implement partial reads. */
+    var MAX_FULL_LOAD_BYTES = 200 * 1024 * 1024;       // 200 MB
+
     function extract(file, cb) {
         var uri = (typeof file === 'string') ? file
                 : (typeof file.toURI === 'function') ? file.toURI()
@@ -309,15 +316,33 @@ var Mp4Subs = (function () {
         var xhr = new XMLHttpRequest();
         try { xhr.open('GET', uri, true); } catch (e) { cb(e); return; }
         xhr.responseType = 'arraybuffer';
+        var aborted = false;
+        xhr.onprogress = function (e) {
+            if (aborted) return;
+            if (e && e.lengthComputable && e.total > MAX_FULL_LOAD_BYTES) {
+                aborted = true;
+                try { xhr.abort(); } catch (_) {}
+                cb(new Error('file too large for in-memory extraction: ' +
+                             Math.round(e.total / 1048576) + ' MB > ' +
+                             Math.round(MAX_FULL_LOAD_BYTES / 1048576) + ' MB'));
+            }
+        };
         xhr.onload = function () {
+            if (aborted) return;
             if (!xhr.response) { cb(new Error('empty XHR response')); return; }
+            if (xhr.response.byteLength > MAX_FULL_LOAD_BYTES) {
+                cb(new Error('file too large: ' + xhr.response.byteLength + ' bytes'));
+                return;
+            }
             try {
                 var subs = extractCueLists(xhr.response);
                 for (var i = 0; i < subs.length; i++) subs[i].srt = cuesToSrt(subs[i].cues);
                 cb(null, subs);
             } catch (e) { cb(e); }
         };
-        xhr.onerror = function () { cb(new Error('XHR failed loading ' + uri)); };
+        xhr.onerror = function () {
+            if (!aborted) cb(new Error('XHR failed loading ' + uri));
+        };
         xhr.send();
     }
 
