@@ -321,13 +321,20 @@ var Mp4Subs = (function () {
         xhr.send();
     }
 
-    /* Write an SRT string into wgt-private-tmp and call cb with the
-     * filesystem path AVPlay can read via setExternalSubtitlePath. */
+    /* Write an SRT string into wgt-private-tmp and call cb with a record:
+     *   file:     Tizen File object (Browser.readSubtitleText needs this for
+     *             the JS time-poller fallback path)
+     *   uri:      file:// URI
+     *   fullPath: REAL filesystem path AVPlay's setExternalSubtitlePath wants.
+     *             The virtual 'wgt-private-tmp/…' that File.fullPath gives us
+     *             is rejected with PLAYER_ERROR_INVALID_PARAMETER — only the
+     *             real /opt/usr/apps/<pkg>/tmp/… path works.  Derive it by
+     *             stripping 'file://' from File.toURI(). */
     function writeSrtToTmp(srt, name, cb) {
         try {
             tizen.filesystem.resolve('wgt-private-tmp', function (dir) {
                 var safe = String(name).replace(/[^A-Za-z0-9_.-]+/g, '_');
-                // Append timestamp-ish prefix so old extractions don't collide.
+                // Random suffix so old extractions don't collide.
                 var fname = 'embed_' + safe + '_' + Math.floor(Math.random() * 1e9) + '.srt';
                 try {
                     if (dir.fileExists && dir.fileExists(fname)) dir.deleteFile(dir.fullPath + '/' + fname);
@@ -339,7 +346,17 @@ var Mp4Subs = (function () {
                     try {
                         stream.write(srt);
                         stream.close();
-                        cb(null, f.fullPath);
+                        var uri      = (typeof f.toURI === 'function') ? f.toURI() : '';
+                        var realPath = '';
+                        if (uri.indexOf('file://') === 0) {
+                            realPath = uri.slice(7);
+                            try { realPath = decodeURIComponent(realPath); } catch (e) {}
+                        }
+                        cb(null, {
+                            file:     f,
+                            uri:      uri || ('file://' + (f.fullPath || '')),
+                            fullPath: realPath || f.fullPath
+                        });
                     } catch (e) { cb(e); }
                 }, function (e) { cb(e); }, 'UTF-8');
             }, function (e) { cb(e); }, 'rw');

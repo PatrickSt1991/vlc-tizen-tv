@@ -662,24 +662,25 @@ var Player = (function () {
 
             var remaining = subs.length;
             subs.forEach(function (s, i) {
-                Mp4Subs.writeSrtToTmp(s.srt, 'track' + i + '_' + (s.lang || 'unk'), function (werr, path) {
+                Mp4Subs.writeSrtToTmp(s.srt, 'track' + i + '_' + (s.lang || 'unk'), function (werr, rec) {
                     remaining--;
                     if (token !== lastExtractToken) return;
-                    if (werr) {
-                        if (typeof Debug !== 'undefined') Debug.warn('writeSrtToTmp: ' + (werr.message || werr));
+                    if (werr || !rec) {
+                        if (typeof Debug !== 'undefined') Debug.warn('writeSrtToTmp: ' + ((werr && (werr.message || werr)) || 'no record'));
                     } else {
                         playerSubtitles.push({
                             name:       'Embedded subtitle ' + (i + 1) + ' (MP4)',
                             lang:       s.lang || '',
                             ext:        'srt',
-                            fullPath:   path,
-                            uri:        'file://' + path,
+                            file:       rec.file,           // Tizen File obj — for JS-poller fallback
+                            uri:        rec.uri,            // file:// URI
+                            fullPath:   rec.fullPath,       // REAL path — AVPlay needs this
                             _extracted: true,
                             _cueCount:  s.cues.length
                         });
                         if (typeof Debug !== 'undefined')
                             Debug.player('extracted sub written: lang=' + (s.lang || '?') +
-                                         ' cues=' + s.cues.length + ' path=' + path);
+                                         ' cues=' + s.cues.length + ' fullPath=' + rec.fullPath);
                     }
                     if (remaining === 0) onMp4SubExtractionDone();
                 });
