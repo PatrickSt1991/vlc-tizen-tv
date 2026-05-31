@@ -663,9 +663,10 @@ var Player = (function () {
         return 'PROGRESSIVE';
     }
 
-    /* Extract embedded text-subtitle tracks from a local MP4, write each
-     * one to wgt-private-tmp as SRT, and append them to playerSubtitles
-     * so they appear in the CC menu alongside any sibling SRTs.
+    /* Extract embedded text-subtitle tracks from a local MP4 / MKV / WebM,
+     * write each one to wgt-private-tmp as SRT, and append them to
+     * playerSubtitles so they appear in the CC menu alongside any sibling
+     * SRTs.
      *
      * Workaround for the firmware bug where AVPlay's setSelectTrack('TEXT')
      * only delivers the first cue.  setExternalSubtitlePath delivers cues
@@ -676,41 +677,47 @@ var Player = (function () {
      * extracted, we apply it after the fact (setAvExternalSubtitle has its
      * own seek-bug recovery for the mid-playback case). */
     var lastExtractToken = 0;
-    function extractAndAppendMp4Subs(url) {
-        if (typeof Mp4Subs === 'undefined') return;
+    function extractAndAppendEmbeddedSubs(url) {
         var lower = String(url || '').toLowerCase().split('?')[0];
-        if (!/\.mp4$|\.m4v$|\.mov$/.test(lower)) return;
+        var extractor, label;
+        if (/\.mp4$|\.m4v$|\.mov$/.test(lower) && typeof Mp4Subs !== 'undefined') {
+            extractor = Mp4Subs; label = 'MP4';
+        } else if (/\.mkv$|\.webm$/.test(lower) && typeof MkvSubs !== 'undefined') {
+            extractor = MkvSubs; label = 'MKV';
+        } else {
+            return;
+        }
 
-        var token = ++lastExtractToken;   // tag so a later open() invalidates this
-        if (typeof Debug !== 'undefined') Debug.player('MP4 sub extract: starting on ' + url);
-        Mp4Subs.extract(url, function (err, subs) {
-            if (token !== lastExtractToken) return;       // a newer open() superseded us
+        var token = ++lastExtractToken;
+        if (typeof Debug !== 'undefined') Debug.player(label + ' sub extract: starting on ' + url);
+        extractor.extract(url, function (err, subs) {
+            if (token !== lastExtractToken) return;
             if (err) {
-                if (typeof Debug !== 'undefined') Debug.warn('MP4 sub extract failed: ' + (err.message || err));
+                if (typeof Debug !== 'undefined') Debug.warn(label + ' sub extract failed: ' + (err.message || err));
                 return;
             }
             if (!subs || !subs.length) {
-                if (typeof Debug !== 'undefined') Debug.player('MP4 sub extract: no text tracks found');
+                if (typeof Debug !== 'undefined') Debug.player(label + ' sub extract: no text tracks found');
                 return;
             }
             if (typeof Debug !== 'undefined')
-                Debug.player('MP4 sub extract: ' + subs.length + ' track(s) — writing to wgt-private-tmp');
+                Debug.player(label + ' sub extract: ' + subs.length + ' track(s) — writing to wgt-private-tmp');
 
             var remaining = subs.length;
             subs.forEach(function (s, i) {
-                Mp4Subs.writeSrtToTmp(s.srt, 'track' + i + '_' + (s.lang || 'unk'), function (werr, rec) {
+                extractor.writeSrtToTmp(s.srt, 'track' + i + '_' + (s.lang || 'unk'), function (werr, rec) {
                     remaining--;
                     if (token !== lastExtractToken) return;
                     if (werr || !rec) {
                         if (typeof Debug !== 'undefined') Debug.warn('writeSrtToTmp: ' + ((werr && (werr.message || werr)) || 'no record'));
                     } else {
                         playerSubtitles.push({
-                            name:       'Embedded subtitle ' + (i + 1) + ' (MP4)',
+                            name:       'Embedded subtitle ' + (i + 1) + ' (' + label + ')',
                             lang:       s.lang || '',
                             ext:        'srt',
-                            file:       rec.file,           // Tizen File obj — for JS-poller fallback
-                            uri:        rec.uri,            // file:// URI
-                            fullPath:   rec.fullPath,       // REAL path — AVPlay needs this
+                            file:       rec.file,
+                            uri:        rec.uri,
+                            fullPath:   rec.fullPath,
                             _extracted: true,
                             _cueCount:  s.cues.length
                         });
@@ -723,6 +730,8 @@ var Player = (function () {
             });
         });
     }
+    // Old name kept as alias for any cached references.
+    var extractAndAppendMp4Subs = extractAndAppendEmbeddedSubs;
 
     function onMp4SubExtractionDone() {
         h5Subtitles = playerSubtitles;
@@ -768,10 +777,11 @@ var Player = (function () {
             // open the path or never actually decodes. Network URLs get
             // no fallback — they surface errors normally.
             if (isLocalUrl(url)) {
-                // In parallel with avOpen: scan the MP4 for embedded text
-                // subtitle tracks and route them through the working
-                // external-subtitle pipeline.  No-op for non-MP4 files.
-                extractAndAppendMp4Subs(url);
+                // In parallel with avOpen: scan the file for embedded text
+                // subtitle tracks (MP4 / MKV / WebM) and route them through
+                // the working external-subtitle pipeline.  No-op for
+                // unsupported containers.
+                extractAndAppendEmbeddedSubs(url);
 
                 avOpen(url, function (reason) {
                     if (typeof Debug !== 'undefined')
