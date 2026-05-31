@@ -104,6 +104,15 @@ var Player = (function () {
      *     and seek back if the playhead drifted.
      *   - No-op if the same subtitle is already active. */
     var currentExternalSub = null;
+    /* Set when setExternalSubtitlePath was called from a non-IDLE state and
+     * we need to verify the playhead survived.  Two firing paths cover both
+     * timings of the bug:
+     *   - Polled every 250 ms for 4 s right after the call (catches the
+     *     bug if the seek fires while AVPlay is in PLAYING state).
+     *   - Re-checked on the next play() resumption — needed because in the
+     *     PAUSED state the seek doesn't fire until play() is issued. */
+    var pendingPlayheadMs = -1;
+    var pendingPlayheadPoller = null;
     function setAvExternalSubtitle(sub) {
         if (!sub) return false;
         if (currentExternalSub === sub) return true;      // already loaded
@@ -114,16 +123,15 @@ var Player = (function () {
         }
         if (!path) return false;
 
-        // Save the playhead so we can restore if the call triggers the seek.
         var savedMs = 0;
-        var wasPlaying = false;
+        var savedState = 'NONE';
         try {
-            var s = av().getState();
-            wasPlaying = (s === 'PLAYING' || s === 'PAUSED');
-            if (wasPlaying) savedMs = av().getCurrentTime();
+            savedState = av().getState();
+            savedMs    = av().getCurrentTime();
         } catch (e) {}
+        var needsRestore = (savedState === 'PLAYING' || savedState === 'PAUSED') && savedMs > 500;
 
-        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path + ' (wasPlaying=' + wasPlaying + ' savedMs=' + savedMs + ')');
+        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path + ' (state=' + savedState + ' savedMs=' + savedMs + ')');
         try {
             av().setExternalSubtitlePath(path);
         } catch (e) {
@@ -133,21 +141,75 @@ var Player = (function () {
         try { av().setSilentSubtitle(false); } catch (e) {}
         currentExternalSub = sub;
 
-        // If we triggered the post-play seek bug, restore the playhead.
-        if (wasPlaying) {
-            setTimeout(function () {
+        if (needsRestore) {
+            pendingPlayheadMs = savedMs;
+            // Path 1: poll while currently playing — catches the immediate
+            // seek when state==PLAYING at call time.
+            clearInterval(pendingPlayheadPoller);
+            var ticks = 0;
+            pendingPlayheadPoller = setInterval(function () {
+                ticks++;
                 try {
                     var now = av().getCurrentTime();
                     if (Math.abs(now - savedMs) > 1500) {
                         if (typeof Debug !== 'undefined')
-                            Debug.warn('post-setExternalSubtitlePath seek detected (now=' + now +
+                            Debug.warn('playhead jump after setExternalSubtitlePath (now=' + now +
                                        ' saved=' + savedMs + ') — restoring');
-                        av().seekTo(savedMs);
+                        try { av().seekTo(savedMs); } catch (e) {}
+                        clearInterval(pendingPlayheadPoller);
+                        pendingPlayheadPoller = null;
+                        pendingPlayheadMs = -1;
+                        return;
                     }
                 } catch (e) {}
-            }, 400);
+                if (ticks >= 16) {       // 16 × 250 = 4 s
+                    clearInterval(pendingPlayheadPoller);
+                    pendingPlayheadPoller = null;
+                    // Leave pendingPlayheadMs set; play() will pick it up.
+                }
+            }, 250);
         }
         return true;
+    }
+
+    /* Called by play() in the AVPlay branch — handles path 2 of the seek-
+     * restore: when subtitle was changed while paused, the seek bug doesn't
+     * fire until play() resumes.  This runs another 4-second poll after
+     * resumption. */
+    function avResumeWithPossibleRestore() {
+        if (pendingPlayheadMs < 0) return;
+        var target = pendingPlayheadMs;
+        // Don't clear yet — let the poller below decide.
+        clearInterval(pendingPlayheadPoller);
+        var ticks = 0;
+        pendingPlayheadPoller = setInterval(function () {
+            ticks++;
+            try {
+                var now = av().getCurrentTime();
+                if (Math.abs(now - target) > 1500) {
+                    if (typeof Debug !== 'undefined')
+                        Debug.warn('playhead jump after resume (now=' + now + ' target=' + target + ') — restoring');
+                    try { av().seekTo(target); } catch (e) {}
+                    clearInterval(pendingPlayheadPoller);
+                    pendingPlayheadPoller = null;
+                    pendingPlayheadMs = -1;
+                    return;
+                }
+                // If we've drifted naturally past target+wall-clock, the bug
+                // didn't fire — clean up.
+                if (now > target + 2000) {
+                    clearInterval(pendingPlayheadPoller);
+                    pendingPlayheadPoller = null;
+                    pendingPlayheadMs = -1;
+                    return;
+                }
+            } catch (e) {}
+            if (ticks >= 16) {
+                clearInterval(pendingPlayheadPoller);
+                pendingPlayheadPoller = null;
+                pendingPlayheadMs = -1;
+            }
+        }, 250);
     }
 
     /* Pick the best external subtitle for a given language preference, used
@@ -605,7 +667,11 @@ var Player = (function () {
 
     function play() {
         if (backend === BACKEND_HTML5) { try { h5el().play(); } catch (e) {} emit('onstatechange', 'playing'); }
-        else if (backend === BACKEND_AVPLAY) { try { av().play(); } catch (e) {} emit('onstatechange', 'playing'); }
+        else if (backend === BACKEND_AVPLAY) {
+            try { av().play(); } catch (e) {}
+            emit('onstatechange', 'playing');
+            avResumeWithPossibleRestore();
+        }
     }
     function pause() {
         if (backend === BACKEND_HTML5) { try { h5el().pause(); } catch (e) {} emit('onstatechange', 'paused'); }
@@ -621,6 +687,9 @@ var Player = (function () {
         stopExternalSubtitle();
         hideSubtitleText();
         currentExternalSub = null;
+        clearInterval(pendingPlayheadPoller);
+        pendingPlayheadPoller = null;
+        pendingPlayheadMs = -1;
         // Always fully tear down BOTH backends — some firmwares leave the
         // hidden one alive (auto-replaying audio on view switch).
         var v = h5el();
