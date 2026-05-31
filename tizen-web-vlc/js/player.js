@@ -92,22 +92,38 @@ var Player = (function () {
     }
 
     /* Tell AVPlay to load an external subtitle file by path.  Samsung's
-     * own sample (SampleWebApps-PlayerAvplayWithSubtitles) uses exactly
-     * this API: strip 'file://' from the URI, hand AVPlay the raw path,
+     * own sample (SampleWebApps-PlayerAvplayWithSubtitles) uses this API:
+     * strip 'file://' from the URI, hand AVPlay the raw path,
      * setSilentSubtitle(false) to make it deliver cues via the
-     * onsubtitlechange callback.  AVPlay does the parsing + timing —
-     * we just paint each cue in the SUB cb listener.  Returns true on
-     * success, false if either call threw (so the caller can fall back
-     * to our JS time-poller). */
+     * onsubtitlechange callback.
+     *
+     * BUG: on Tizen 5.0 this call triggers a silent seek to ~midway in
+     * the file when invoked AFTER play() has started.  Workarounds:
+     *   - Pre-apply BEFORE play() in avOpen's prepare callback (no seek).
+     *   - For mid-playback switches, save currentTime before the call
+     *     and seek back if the playhead drifted.
+     *   - No-op if the same subtitle is already active. */
+    var currentExternalSub = null;
     function setAvExternalSubtitle(sub) {
         if (!sub) return false;
+        if (currentExternalSub === sub) return true;      // already loaded
         var path = sub.fullPath || sub.uri || '';
         if (path.indexOf('file://') === 0) {
             path = path.slice(7);
             try { path = decodeURIComponent(path); } catch (e) {}
         }
         if (!path) return false;
-        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path);
+
+        // Save the playhead so we can restore if the call triggers the seek.
+        var savedMs = 0;
+        var wasPlaying = false;
+        try {
+            var s = av().getState();
+            wasPlaying = (s === 'PLAYING' || s === 'PAUSED');
+            if (wasPlaying) savedMs = av().getCurrentTime();
+        } catch (e) {}
+
+        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path + ' (wasPlaying=' + wasPlaying + ' savedMs=' + savedMs + ')');
         try {
             av().setExternalSubtitlePath(path);
         } catch (e) {
@@ -115,7 +131,45 @@ var Player = (function () {
             return false;
         }
         try { av().setSilentSubtitle(false); } catch (e) {}
+        currentExternalSub = sub;
+
+        // If we triggered the post-play seek bug, restore the playhead.
+        if (wasPlaying) {
+            setTimeout(function () {
+                try {
+                    var now = av().getCurrentTime();
+                    if (Math.abs(now - savedMs) > 1500) {
+                        if (typeof Debug !== 'undefined')
+                            Debug.warn('post-setExternalSubtitlePath seek detected (now=' + now +
+                                       ' saved=' + savedMs + ') — restoring');
+                        av().seekTo(savedMs);
+                    }
+                } catch (e) {}
+            }, 400);
+        }
         return true;
+    }
+
+    /* Pick the best external subtitle for a given language preference, used
+     * to pre-apply at file open before play() — the only point at which
+     * setExternalSubtitlePath doesn't cause the seek bug. */
+    function pickBestExternalSubtitle(prefLang) {
+        if (!prefLang || prefLang === 'off' || !playerSubtitles.length) return null;
+        var want = prefLang.toLowerCase();
+        var best = null;
+        var bestScore = 0;
+        for (var i = 0; i < playerSubtitles.length; i++) {
+            var s = playerSubtitles[i];
+            var lang = (s.lang || '').toLowerCase();
+            var nm   = (s.name || '').toLowerCase();
+            var sc = 0;
+            if      (lang === want)                                            sc = 100;
+            else if (lang && want.length === 2 && lang.indexOf(want) === 0)    sc = 90;
+            else if (lang && lang.length === 2 && want.indexOf(lang) === 0)    sc = 90;
+            else if (nm.indexOf(want) >= 0)                                    sc = 50;
+            if (sc > bestScore) { bestScore = sc; best = s; }
+        }
+        return best;
     }
 
     /* AVPlay subtitle painter — three paths feed into the same overlay:
@@ -373,6 +427,17 @@ var Player = (function () {
                 function () {
                     avSetDisplayRect();
                     avSetDisplayMethod();
+
+                    /* Pre-apply preferred external subtitle BEFORE play() —
+                     * calling setExternalSubtitlePath after play() triggers a
+                     * silent seek to mid-file on Tizen 5.0.  Doing it here,
+                     * with AVPlay in the READY state, avoids the bug. */
+                    if (typeof Settings !== 'undefined') {
+                        var pref = Settings.get('subtitleLang');
+                        var sub  = pickBestExternalSubtitle(pref);
+                        if (sub) setAvExternalSubtitle(sub);
+                    }
+
                     try { av().play(); } catch (e) {}
                     avStartPolling(onFallback);
                     emit('onstatechange', 'playing');
@@ -555,6 +620,7 @@ var Player = (function () {
         clearTimeout(h5OpenWatchdog);
         stopExternalSubtitle();
         hideSubtitleText();
+        currentExternalSub = null;
         // Always fully tear down BOTH backends — some firmwares leave the
         // hidden one alive (auto-replaying audio on view switch).
         var v = h5el();
