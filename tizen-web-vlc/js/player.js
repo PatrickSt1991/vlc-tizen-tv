@@ -133,53 +133,28 @@ var Player = (function () {
             savedMs    = av().getCurrentTime();
         } catch (e) {}
         var needsRestore = (savedState === 'PLAYING' || savedState === 'PAUSED') && savedMs > 500;
-        var wasPlaying   = (savedState === 'PLAYING');
 
         if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path + ' (state=' + savedState + ' savedMs=' + savedMs + ')');
-
-        /* Preempt the firmware bug.  setExternalSubtitlePath leaves an
-         * internal "pending mid-file seek" in AVPlay that fires as soon as
-         * playback resumes.  Two countermeasures here:
-         *   1. If currently PLAYING, pause first so the bug can't fire
-         *      while video frames are being decoded.
-         *   2. Right after setExternalSubtitlePath, call seekTo(savedMs)
-         *      explicitly — this overrides AVPlay's internal pending seek
-         *      so the resume picks up at the correct position.
-         * The interval poller below stays as a safety net in case a future
-         * firmware variant manages to defeat the explicit seek. */
-        if (wasPlaying) {
-            try { av().pause(); } catch (e) {}
-        }
         try {
             av().setExternalSubtitlePath(path);
         } catch (e) {
             if (typeof Debug !== 'undefined') Debug.error('setExternalSubtitlePath: ' + (e.message || e));
-            if (wasPlaying) { try { av().play(); } catch (e2) {} }
             return false;
         }
         try { av().setSilentSubtitle(false); } catch (e) {}
         currentExternalSub = sub;
 
         if (needsRestore) {
-            // Preemptive seek — overrides the firmware bug's pending seek.
-            try { av().seekTo(savedMs); } catch (e) {}
             pendingPlayheadMs = savedMs;
-        }
-
-        if (wasPlaying) {
-            // Resume.  At this point AVPlay should pick up at savedMs.
-            try { av().play(); } catch (e) {}
-
-            // Safety net: if despite the preemptive seek AVPlay still
-            // jumps, the poll catches it.  Bypasses if everything went
-            // smoothly (now stays within 1.5s of savedMs).
+            // Path 1: poll while currently playing — catches the immediate
+            // seek when state==PLAYING at call time.
             clearInterval(pendingPlayheadPoller);
             var ticks = 0;
             pendingPlayheadPoller = setInterval(function () {
                 ticks++;
                 try {
                     var now = av().getCurrentTime();
-                    if (Math.abs(now - savedMs) > 1500 && now > savedMs + 1500) {
+                    if (Math.abs(now - savedMs) > 1500) {
                         if (typeof Debug !== 'undefined')
                             Debug.warn('playhead jump after setExternalSubtitlePath (now=' + now +
                                        ' saved=' + savedMs + ') — restoring');
@@ -189,22 +164,14 @@ var Player = (function () {
                         pendingPlayheadMs = -1;
                         return;
                     }
-                    // Allow natural advance past the target — bug didn't fire.
-                    if (now > savedMs + 2000) {
-                        clearInterval(pendingPlayheadPoller);
-                        pendingPlayheadPoller = null;
-                        pendingPlayheadMs = -1;
-                        return;
-                    }
                 } catch (e) {}
-                if (ticks >= 16) {
+                if (ticks >= 16) {       // 16 × 250 = 4 s
                     clearInterval(pendingPlayheadPoller);
                     pendingPlayheadPoller = null;
+                    // Leave pendingPlayheadMs set; play() will pick it up.
                 }
             }, 250);
         }
-        // PAUSED-case: pendingPlayheadMs left set so Player.play() can
-        // do its own preemptive seek when the user eventually resumes.
         return true;
     }
 
@@ -802,16 +769,6 @@ var Player = (function () {
     function play() {
         if (backend === BACKEND_HTML5) { try { h5el().play(); } catch (e) {} emit('onstatechange', 'playing'); }
         else if (backend === BACKEND_AVPLAY) {
-            /* Preempt the setExternalSubtitlePath firmware bug.  If the
-             * user picked a subtitle while paused, AVPlay has a pending
-             * mid-file seek queued up that will fire the instant we call
-             * play().  Beat it to the punch by issuing an explicit
-             * seekTo(target) right before play() — that overrides the
-             * internal pending seek so the resume picks up at the right
-             * spot.  avResumeWithPossibleRestore() stays as a safety net. */
-            if (pendingPlayheadMs >= 0) {
-                try { av().seekTo(pendingPlayheadMs); } catch (e) {}
-            }
             try { av().play(); } catch (e) {}
             emit('onstatechange', 'playing');
             avResumeWithPossibleRestore();
