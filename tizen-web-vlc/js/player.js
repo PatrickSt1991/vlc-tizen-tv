@@ -91,6 +91,33 @@ var Player = (function () {
         }
     }
 
+    /* Tell AVPlay to load an external subtitle file by path.  Samsung's
+     * own sample (SampleWebApps-PlayerAvplayWithSubtitles) uses exactly
+     * this API: strip 'file://' from the URI, hand AVPlay the raw path,
+     * setSilentSubtitle(false) to make it deliver cues via the
+     * onsubtitlechange callback.  AVPlay does the parsing + timing —
+     * we just paint each cue in the SUB cb listener.  Returns true on
+     * success, false if either call threw (so the caller can fall back
+     * to our JS time-poller). */
+    function setAvExternalSubtitle(sub) {
+        if (!sub) return false;
+        var path = sub.fullPath || sub.uri || '';
+        if (path.indexOf('file://') === 0) {
+            path = path.slice(7);
+            try { path = decodeURIComponent(path); } catch (e) {}
+        }
+        if (!path) return false;
+        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path);
+        try {
+            av().setExternalSubtitlePath(path);
+        } catch (e) {
+            if (typeof Debug !== 'undefined') Debug.error('setExternalSubtitlePath: ' + (e.message || e));
+            return false;
+        }
+        try { av().setSilentSubtitle(false); } catch (e) {}
+        return true;
+    }
+
     /* AVPlay subtitle painter — three paths feed into the same overlay:
      *
      *   1. AVPlay's onsubtitlechange callback (used for embedded subs).  On
@@ -296,11 +323,13 @@ var Player = (function () {
             if (typeof Debug !== 'undefined')
                 Debug.player('SUB cb dur=' + duration + ' type=' + type +
                              ' text=' + JSON.stringify(text || '').slice(0, 80));
-            /* DO NOT paint our overlay from this callback.  AVPlay renders
-             * the embedded subtitle natively on its video plane — painting
-             * our overlay too would double the text.  Our overlay is
-             * exclusively for the external-SRT time-poller, which silences
-             * AVPlay via setSilentSubtitle(true) before painting. */
+            /* This is the Samsung-recommended pattern (see their sample
+             * SampleWebApps-PlayerAvplayWithSubtitles).  When AVPlay loads
+             * subtitles via setExternalSubtitlePath() OR via embedded TEXT
+             * tracks, it fires this callback with each cue's text.  We just
+             * paint it.  AVPlay does NOT render subtitles natively on its
+             * video plane on this firmware — the app has to. */
+            showSubtitleText(text, duration);
         };
 
         try {
@@ -740,12 +769,20 @@ var Player = (function () {
                 return;
             }
 
-            // External subtitle file: "ext:<k>" — load + time-poll ourselves
+            // External subtitle file: prefer AVPlay's setExternalSubtitlePath
+            // (Samsung-recommended path — fires onsubtitlechange per cue).
+            // If that fails, fall back to our JS time-poller.
             if (typeof index === 'string' && index.indexOf('ext:') === 0) {
                 var k = parseInt(index.slice(4), 10);
                 var sub = playerSubtitles[k];
-                if (sub) {
-                    try { av().setSilentSubtitle(true); } catch (e) {}   // mute AVPlay's own subs
+                if (!sub) return;
+                if (setAvExternalSubtitle(sub)) {
+                    if (typeof Debug !== 'undefined')
+                        Debug.player('external sub via AVPlay: ' + sub.name);
+                } else {
+                    if (typeof Debug !== 'undefined')
+                        Debug.player('AVPlay external-sub API failed; using JS poller for ' + sub.name);
+                    try { av().setSilentSubtitle(true); } catch (e) {}
                     startExternalSubtitle(sub);
                 }
                 return;
