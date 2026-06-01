@@ -43,14 +43,52 @@
         try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) {}
     }
 
+    /* ── Watched history (localStorage map uri → timestamp) ──────────
+     * Lets the browser mark already-seen episodes so navigating a series
+     * folder shows at a glance which files are done.  An item is marked
+     * watched when playback finishes (oncomplete) or when the user leaves
+     * after watching ≥ 90 % of it. */
+    var WATCHED_KEY = 'vlctv_watched_v1';
+    function getWatched() {
+        try { return JSON.parse(localStorage.getItem(WATCHED_KEY) || '{}'); }
+        catch (e) { return {}; }
+    }
+    function isWatched(uri) {
+        if (!uri) return false;
+        return !!getWatched()[uri];
+    }
+    function markWatched(uri) {
+        if (!uri) return;
+        var w = getWatched();
+        if (w[uri]) return;
+        w[uri] = Date.now();
+        // Cap growth: drop the oldest entries once we pass 500.
+        var keys = Object.keys(w);
+        if (keys.length > 500) {
+            keys.sort(function (a, b) { return w[a] - w[b]; })
+                .slice(0, keys.length - 500)
+                .forEach(function (k) { delete w[k]; });
+        }
+        try { localStorage.setItem(WATCHED_KEY, JSON.stringify(w)); } catch (e) {}
+    }
+
     /* ── State ────────────────────────────────────────────────────── */
     var state = {
         view:       'home',        // home | url | browse | player
         browseDir:  null,          // current Tizen File or null at root listing
         browseAtRoot: true,        // true when listing the virtual roots
         playingUri: null,
-        playingTitle: ''
+        playingTitle: '',
+        // Where the current playback was launched from, so exiting the
+        // player returns to that menu instead of always jumping home.
+        origin:     'home',        // 'browse' | 'recent' | 'url' | 'home'
+        originDir:  null,          // Tizen File of the browse folder when origin==='browse'
+        // Ordered playable siblings + position, powering auto-play / next-prev.
+        playlist:   [],            // [{ uri, title, subtitles }]
+        playlistIndex: -1
     };
+    // Latest progress sample, used to decide partial-watch → watched on exit.
+    var lastProgress = { time: 0, duration: 0 };
 
     /* ── Init ─────────────────────────────────────────────────────── */
     function init() {
@@ -99,6 +137,7 @@
             else hideSpinner();
         });
         Player.setListener('onprogress', function (p) {
+            lastProgress = { time: (p && p.time) || 0, duration: (p && p.duration) || 0 };
             updateProgress(p && p.time, p && p.duration);
         });
         Player.setListener('oncomplete', function () {
@@ -108,8 +147,12 @@
                 Player.play();
                 return;
             }
+            // A file that played to the end counts as watched.
+            markWatched(state.playingUri);
+            // Auto-play the next sibling if enabled and one exists.
+            if (Settings.get('autoPlay') && playNext(true)) return;
             UI.toast('Playback finished');
-            backToHome();
+            exitPlayer();
         });
         Player.setListener('onsubsupdated', function () {
             // MP4 embedded-sub extraction completed.  If the CC menu is
@@ -143,7 +186,9 @@
             }
             case 'back-home':          backToHome(); break;
             case 'play-pause':         Player.togglePause(); scheduleOSDHide(); break;
-            case 'stop':               Player.stop(); backToHome(); break;
+            case 'stop':               exitPlayer(); break;
+            case 'prev':               if (!playPrev())      UI.toast('No previous item'); break;
+            case 'next':               if (!playNext(false)) UI.toast('No next item');     break;
             case 'rewind':             Player.seekRel(-10000); flashOSD(); break;
             case 'forward':            Player.seekRel( 10000); flashOSD(); break;
             case 'seek-backward':      Player.seekRel(-60000); flashOSD(); break;
@@ -154,6 +199,7 @@
             case 'setting-audio-lang':    openLangPicker('audioLang',    'Preferred audio language', LanguageList.forAudio());    break;
             case 'setting-subtitle-lang': openLangPicker('subtitleLang', 'Preferred subtitle language', LanguageList.forSubtitle()); break;
             case 'setting-repeat-mode':   openRepeatPicker(); break;
+            case 'setting-auto-play':     openAutoPlayPicker(); break;
             case 'setting-embedded-subs': openEmbeddedSubsPicker(); break;
             case 'close-picker':       closePicker(); break;
         }
@@ -161,7 +207,12 @@
 
     /* ── URL playback ─────────────────────────────────────────────── */
     function openUrl(url) {
-        playUri(url, urlBaseName(url));
+        var title = urlBaseName(url);
+        state.origin    = 'url';
+        state.originDir = null;
+        state.playlist  = [{ uri: url, title: title }];
+        state.playlistIndex = 0;
+        playUri(url, title);
     }
     function urlBaseName(url) {
         try {
@@ -226,23 +277,34 @@
                              + err.message + '</span></li>';
                 return;
             }
+            // Ordered list of playable media in this folder — the playlist
+            // that auto-play and next/prev walk through.
+            var playlist = entries
+                .filter(function (e) { return e.playable; })
+                .map(function (e) { return { uri: e.uri, title: e.name, subtitles: e.subtitles }; });
+
             entries.forEach(function (e) {
                 if (e.isDir === false && !e.playable) return; // hide non-media files
                 var li = document.createElement('li');
                 li.dataset.uri = e.uri || '';
                 li.dataset.dir = e.isDir ? '1' : '0';
+                var watched = !e.isDir && isWatched(e.uri);
+                if (watched) li.classList.add('watched-item');
+                var watchedBadge = watched ? '<span class="watched" title="Watched">✓</span>' : '';
                 var subBadge = (e.subtitles && e.subtitles.length)
                     ? '<span class="meta">CC ×' + e.subtitles.length + '</span>'
                     : '';
                 li.innerHTML =
                     '<span class="icon">' + (e.isDir ? '📁' : '🎬') + '</span>' +
                     '<span class="name">' + escapeHtml(e.name) + '</span>' +
+                    watchedBadge +
                     subBadge +
                     (e.isDir ? '' :
                         '<span class="meta">' + Browser.humanSize(e.size) + '</span>');
                 li.addEventListener('click', function () {
-                    if (e.isDir) listInto(e.file);
-                    else playUri(e.uri, e.name, { subtitles: e.subtitles });
+                    if (e.isDir) { listInto(e.file); return; }
+                    var idx = playlist.findIndex(function (p) { return p.uri === e.uri; });
+                    playFromList('browse', playlist, idx >= 0 ? idx : 0, dir);
                 });
                 ul.appendChild(li);
             });
@@ -265,13 +327,20 @@
         document.getElementById('browse-title').textContent = 'Recently Played';
         document.getElementById('browse-path').textContent = '';
         var ul = document.getElementById('browse-list'); ul.innerHTML = '';
-        list.forEach(function (item) {
+        var playlist = list.map(function (item) {
+            return { uri: item.uri, title: item.title, subtitles: item.subtitles };
+        });
+        list.forEach(function (item, i) {
             var li = document.createElement('li');
+            var watched = isWatched(item.uri);
+            if (watched) li.classList.add('watched-item');
+            var watchedBadge = watched ? '<span class="watched" title="Watched">✓</span>' : '';
             li.innerHTML = '<span class="icon">★</span>' +
                            '<span class="name">' + escapeHtml(item.title) + '</span>' +
+                           watchedBadge +
                            '<span class="meta">' + escapeHtml(item.uri) + '</span>';
             li.addEventListener('click', function () {
-                playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+                playFromList('recent', playlist, i, null);
             });
             ul.appendChild(li);
         });
@@ -287,8 +356,10 @@
         // Reset the once-per-file gate so applyLanguagePreferences runs for
         // the new file (and not for the previous file).
         prefsAppliedFor = null;
+        lastProgress = { time: 0, duration: 0 };
         state.playingUri = uri;
         state.playingTitle = title || uri;
+        updateNextPrevButtons();
         UI.showView('view-player'); state.view = 'player';
         if (typeof Debug !== 'undefined') Debug.view('player');
 
@@ -343,6 +414,67 @@
 
         pushRecent({ uri: uri, title: title || uri, subtitles: opts.subtitles });
         scheduleOSDHide();
+    }
+
+    /* ── Playlist navigation (auto-play + next/prev) ──────────────── */
+    function playFromList(origin, playlist, idx, dir) {
+        state.origin        = origin;
+        state.originDir     = dir;
+        state.playlist      = playlist || [];
+        state.playlistIndex = idx;
+        var item = state.playlist[idx];
+        if (!item) return;
+        playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+    }
+    function playNext(isAuto) {
+        var ni = state.playlistIndex + 1;
+        if (state.playlistIndex < 0 || ni >= state.playlist.length) return false;
+        var item = state.playlist[ni];
+        state.playlistIndex = ni;
+        if (isAuto) UI.toast('Up next: ' + item.title);
+        playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+        return true;
+    }
+    function playPrev() {
+        if (state.playlistIndex <= 0) return false;
+        var pi = state.playlistIndex - 1;
+        var item = state.playlist[pi];
+        state.playlistIndex = pi;
+        playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+        return true;
+    }
+    /* Dim the prev/next OSD buttons when there's nothing on that side. */
+    function updateNextPrevButtons() {
+        var prev = document.getElementById('btn-prev');
+        var next = document.getElementById('btn-next');
+        if (prev) prev.classList.toggle('disabled', state.playlistIndex <= 0);
+        if (next) next.classList.toggle('disabled',
+            state.playlistIndex < 0 || state.playlistIndex + 1 >= state.playlist.length);
+    }
+
+    /* Leave the player and return to the menu playback was launched from,
+     * rather than always jumping back to the home screen. */
+    function exitPlayer() {
+        // Watched ≥ 90 % counts as seen even if the user stops before the end.
+        if (lastProgress.duration && lastProgress.time / lastProgress.duration >= 0.9)
+            markWatched(state.playingUri);
+
+        Player.stop();
+        hideError();
+        document.getElementById('osd-top').classList.add('hidden');
+        document.getElementById('osd-bottom').classList.add('hidden');
+        closeTrackMenu();
+
+        if (state.origin === 'browse' && state.originDir) {
+            if (typeof Debug !== 'undefined') Debug.view('browse (return)');
+            UI.showView('view-browse'); state.view = 'browse'; state.browseAtRoot = false;
+            listInto(state.originDir);
+        } else if (state.origin === 'recent') {
+            if (typeof Debug !== 'undefined') Debug.view('recent (return)');
+            openRecent();
+        } else {
+            backToHome();
+        }
     }
 
     function backToHome() {
@@ -460,6 +592,7 @@
         document.getElementById('setting-audio-lang-value').textContent    = LanguageList.nameFor(Settings.get('audioLang'));
         document.getElementById('setting-subtitle-lang-value').textContent = LanguageList.nameFor(Settings.get('subtitleLang'));
         document.getElementById('setting-repeat-mode-value').textContent   = (Settings.get('repeatMode') === 'one') ? 'Repeat one' : 'Off';
+        document.getElementById('setting-auto-play-value').textContent     = Settings.get('autoPlay') ? 'On' : 'Off';
         document.getElementById('setting-embedded-subs-value').textContent = Settings.get('showEmbeddedSubs') ? 'On' : 'Off';
         // Mirror repeat state to the OSD button if visible
         updateRepeatButton();
@@ -555,6 +688,18 @@
             Settings.set('repeatMode', val);
             refreshSettingsValues();
             UI.toast('Repeat: ' + (val === 'one' ? 'On' : 'Off'));
+        });
+    }
+    function openAutoPlayPicker() {
+        pickerSetting = 'autoPlay';
+        var cur = Settings.get('autoPlay') ? 'on' : 'off';
+        openPicker('Auto-play next file', [
+            { code: 'off', name: 'Off' },
+            { code: 'on',  name: 'On — play the next file in the folder automatically' }
+        ], cur, function (val) {
+            Settings.set('autoPlay', val === 'on');
+            refreshSettingsValues();
+            UI.toast('Auto-play: ' + (val === 'on' ? 'On' : 'Off'));
         });
     }
     function openEmbeddedSubsPicker() {
@@ -721,7 +866,7 @@
                 if (trackMenuOpen)              { closeTrackMenu();  return true; }
                 if (errorUp)                    { backToHome();      return true; }
                 if (state.view === 'browse')    { browseUp();        return true; }
-                if (state.view === 'player')    { backToHome();      return true; }
+                if (state.view === 'player')    { exitPlayer();      return true; }
                 if (state.view === 'url')       { backToHome();      return true; }
                 if (state.view === 'settings')  { backToHome();      return true; }
                 return false; /* let TV handle EXIT-from-home */
@@ -731,7 +876,7 @@
                 if (state.view === 'player') { Player.togglePause(); flashOSD(); return true; }
                 return false;
             case K.STOP:
-                if (state.view === 'player') { Player.stop(); backToHome(); return true; }
+                if (state.view === 'player') { exitPlayer(); return true; }
                 return false;
             case K.REWIND:
                 if (state.view === 'player') { Player.seekRel(-30000); flashOSD(); return true; }
