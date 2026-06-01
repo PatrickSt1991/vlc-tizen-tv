@@ -307,6 +307,16 @@ button:focus { outline: none; }
     font-size: 18px;
     flex-shrink: 0;
 }
+/* Watched indicator: a green check on already-seen items, with the row
+ * dimmed so unseen episodes stand out when scanning a series folder. */
+.browse-list .watched {
+    flex-shrink: 0;
+    color: #5cb85c;
+    font-size: 20px;
+    font-weight: 700;
+}
+.browse-list li.watched-item .name { color: var(--fg-mute); }
+.browse-list li.watched-item .icon { opacity: .6; }
 
 /* ── Player ───────────────────────────────────────────────────────── */
 #player-object {
@@ -438,6 +448,9 @@ button:focus { outline: none; }
     background: var(--accent-2);
     border-color: var(--accent-2);
 }
+/* Prev/Next greyed out when there's no sibling in that direction.  Stays
+ * focusable so the remote doesn't get stuck skipping over it. */
+.ctrl.disabled { opacity: .35; }
 
 /* ── Spinner ──────────────────────────────────────────────────────── */
 .spinner {
