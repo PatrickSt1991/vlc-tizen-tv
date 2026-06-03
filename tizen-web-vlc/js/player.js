@@ -931,8 +931,38 @@ var Player = (function () {
 
     function setAudioTrack(index) {
         if (backend === BACKEND_AVPLAY) {
-            try { av().setSelectTrack('AUDIO', index); } catch (e) {}
-        } else if (backend === BACKEND_HTML5) {
+            /* Tizen 5.0 quirk: setSelectTrack('AUDIO', N) registers the new
+             * track index, but the audio decoder keeps using whatever frames
+             * it had already buffered with the previous track — so the user
+             * hears no change until the buffer drains (often never, if the
+             * buffer is large).  Force a buffer flush by seeking to a point
+             * slightly behind the current playhead.  Tiny rewind (~750 ms)
+             * is barely audible and makes AVPlay rebuild the audio pipeline
+             * with the new track immediately. */
+            var savedMs = 0;
+            var savedState = 'NONE';
+            try {
+                savedState = av().getState();
+                savedMs    = av().getCurrentTime();
+            } catch (e) {}
+            if (typeof Debug !== 'undefined')
+                Debug.player('setSelectTrack AUDIO ' + index + ' (state=' + savedState + ' t=' + savedMs + 'ms)');
+            try {
+                av().setSelectTrack('AUDIO', index);
+            } catch (e) {
+                if (typeof Debug !== 'undefined') Debug.error('setSelectTrack AUDIO: ' + (e.message || e));
+                return;
+            }
+            // Flush by seeking to ~750 ms behind the playhead.  Skip when
+            // we're near the start (under 1 s in) — nothing to flush yet.
+            if (savedMs > 1000 && (savedState === 'PLAYING' || savedState === 'PAUSED')) {
+                var flushTo = Math.max(0, savedMs - 750);
+                try { av().seekTo(flushTo); } catch (e) {}
+                if (typeof Debug !== 'undefined') Debug.player('  audio-track flush seek → ' + flushTo + 'ms');
+            }
+            return;
+        }
+        if (backend === BACKEND_HTML5) {
             var v = h5el();
             if (v.audioTracks) {
                 for (var i = 0; i < v.audioTracks.length; i++)
