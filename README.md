@@ -141,6 +141,16 @@ If VLC TV is useful to you, consider supporting development:
 
 <img src="tizen-web-vlc/ko-fi-qr.webp" alt="Ko-fi QR" width="180">
 
+## Screenshots
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143227" src="https://github.com/user-attachments/assets/5ea3ba2f-f797-44b2-8b72-e4760bca657a" />
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143213" src="https://github.com/user-attachments/assets/947c1b3c-8e7b-4d4a-934a-f4c25ea12742" />
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143110" src="https://github.com/user-attachments/assets/e13648e0-bcfe-4773-a817-9e5e10ee4629" />
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143057" src="https://github.com/user-attachments/assets/a57dd4d1-8761-4101-abf0-c6f93048e9bf" />
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143027" src="https://github.com/user-attachments/assets/5fe0422f-08e1-43eb-9c5a-ea855f755558" />
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143016" src="https://github.com/user-attachments/assets/3ffc8365-c73a-4eba-b05b-63ed399ef33a" />
+<img width="1457" height="834" alt="Screenshot 2026-06-03 143007" src="https://github.com/user-attachments/assets/16e1d60a-8f3d-44de-b419-20e9bc8188ed" />
+
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
