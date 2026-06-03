@@ -977,14 +977,37 @@ var Player = (function () {
                 savedState = av().getState();
                 savedMs    = av().getCurrentTime();
             } catch (e) {}
+            // Log what AVPlay thinks is currently selected, for comparison.
+            var beforeIdx = -1;
+            try {
+                var before = av().getCurrentStreamInfo();
+                if (before && before.length) {
+                    for (var bi = 0; bi < before.length; bi++) {
+                        if (before[bi].type === 'AUDIO') { beforeIdx = before[bi].index; break; }
+                    }
+                }
+            } catch (e) {}
             if (typeof Debug !== 'undefined')
-                Debug.player('setSelectTrack AUDIO ' + index + ' (state=' + savedState + ' t=' + savedMs + 'ms)');
+                Debug.player('setSelectTrack AUDIO ' + index + ' (state=' + savedState +
+                             ' t=' + savedMs + 'ms before=' + beforeIdx + ')');
             try {
                 av().setSelectTrack('AUDIO', index);
             } catch (e) {
-                if (typeof Debug !== 'undefined') Debug.error('setSelectTrack AUDIO: ' + (e.message || e));
+                if (typeof Debug !== 'undefined') Debug.error('setSelectTrack AUDIO threw: ' + (e.message || e));
                 return;
             }
+            // Confirm AVPlay actually registered the change.
+            var afterIdx = -1;
+            try {
+                var after = av().getCurrentStreamInfo();
+                if (after && after.length) {
+                    for (var ai = 0; ai < after.length; ai++) {
+                        if (after[ai].type === 'AUDIO') { afterIdx = after[ai].index; break; }
+                    }
+                }
+            } catch (e) {}
+            if (typeof Debug !== 'undefined')
+                Debug.player('  setSelectTrack AUDIO returned; getCurrentStreamInfo now reports index=' + afterIdx);
             // Flush by seeking to ~750 ms behind the playhead.  Skip when
             // we're near the start (under 1 s in) — nothing to flush yet.
             if (savedMs > 1000 && (savedState === 'PLAYING' || savedState === 'PAUSED')) {
