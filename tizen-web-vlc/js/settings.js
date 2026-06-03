@@ -10,8 +10,7 @@ var Settings = (function () {
         audioLang:        '',      // '' = auto (use file's default), or ISO code
         subtitleLang:     'off',   // 'off' = no subs, '' = auto-pick first, or ISO code
         repeatMode:       'off',   // 'off' | 'one'
-        autoPlay:         false,   // auto-play the next file in the folder when one finishes
-        showEmbeddedSubs: false    // expose AVPlay's embedded TEXT tracks in CC menu
+        autoPlay:         false    // auto-play the next file in the folder when one finishes
     };
     var cache = null;
 
@@ -24,7 +23,7 @@ var Settings = (function () {
             for (var k in defaults)
                 cache[k] = (k in stored) ? stored[k] : defaults[k];
         } catch (e) {
-            cache = { audioLang: '', subtitleLang: 'off', repeatMode: 'off', autoPlay: false, showEmbeddedSubs: false };
+            cache = { audioLang: '', subtitleLang: 'off', repeatMode: 'off', autoPlay: false };
         }
         return cache;
     }

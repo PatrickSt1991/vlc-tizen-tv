@@ -830,19 +830,16 @@ var Player = (function () {
         var out = { audio: [], subtitle: [{ index: -1, name: 'Off', off: true, active: false }] };
 
         if (backend === BACKEND_AVPLAY) {
-            // Off by default — see player.js header note.  User can flip this
-            // in Settings if they have a file with usable embedded subs and
-            // no external SRT sibling.
-            var showEmbed = (typeof Settings !== 'undefined') &&
-                            Settings.get('showEmbeddedSubs');
-            // If we successfully extracted embedded subs into wgt-private-tmp,
-            // suppress the broken native AVPLAY_EMBED entries — keeping both
-            // would just confuse the user (one works, one doesn't).
+            // Show native AVPlay-reported embedded subtitle tracks as a
+            // fallback when extraction wasn't possible (unsupported codec,
+            // file too large, etc.).  When we DID extract working SRTs,
+            // suppress the native (broken-on-Tizen-5.0) entries so the
+            // user doesn't see duplicates where only one actually works.
             var hasExtracted = false;
             for (var ei = 0; ei < playerSubtitles.length; ei++) {
                 if (playerSubtitles[ei]._extracted) { hasExtracted = true; break; }
             }
-            if (hasExtracted) showEmbed = false;
+            var showEmbed = !hasExtracted;
 
             /* Pull the currently-selected track indices so we can mark
              * the matching menu entries as active.  AVPlay returns either
