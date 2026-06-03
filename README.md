@@ -133,6 +133,14 @@ experience, supported path.
 - Samsung Tizen TV AVPlay API docs
 - [tizen-jellyfin-avplay](https://github.com/PatrickSt1991/tizen-jellyfin-avplay) — workflow template inspiration
 
+## Support
+
+If VLC TV is useful to you, consider supporting development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/M4M71JOT9R)
+
+<img src="tizen-web-vlc/ko-fi-qr.webp" alt="Ko-fi QR" width="180">
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
