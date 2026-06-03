@@ -843,6 +843,23 @@ var Player = (function () {
                 if (playerSubtitles[ei]._extracted) { hasExtracted = true; break; }
             }
             if (hasExtracted) showEmbed = false;
+
+            /* Pull the currently-selected track indices so we can mark
+             * the matching menu entries as active.  AVPlay returns either
+             * type 'TEXT' or 'SUBTITLE' depending on firmware version. */
+            var activeAudioIdx = -1;
+            var activeTextIdx  = -1;
+            try {
+                var cur = av().getCurrentStreamInfo();
+                if (cur && cur.length) {
+                    for (var ci = 0; ci < cur.length; ci++) {
+                        if (cur[ci].type === 'AUDIO') activeAudioIdx = cur[ci].index;
+                        else if (cur[ci].type === 'TEXT' || cur[ci].type === 'SUBTITLE')
+                            activeTextIdx = cur[ci].index;
+                    }
+                }
+            } catch (e) {}
+
             try {
                 var info = av().getTotalTrackInfo();
                 for (var i = 0; i < info.length; i++) {
@@ -851,21 +868,26 @@ var Player = (function () {
                     if (t.type === 'VIDEO') continue;
                     if (t.type === 'AUDIO') {
                         out.audio.push({
-                            index: t.index,
-                            name:  parsed.label || ('Audio ' + t.index),
-                            lang:  parsed.lang || '',
-                            type:  'AVPLAY'
+                            index:  t.index,
+                            name:   parsed.label || ('Audio ' + t.index),
+                            lang:   parsed.lang || '',
+                            type:   'AVPLAY',
+                            active: (t.index === activeAudioIdx)
                         });
                     } else if ((t.type === 'TEXT' || t.type === 'SUBTITLE') && showEmbed) {
                         out.subtitle.push({
-                            index: 'embed:' + t.index,
-                            name:  '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
-                            lang:  parsed.lang || '',
-                            type:  'AVPLAY_EMBED'
+                            index:  'embed:' + t.index,
+                            name:   '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
+                            lang:   parsed.lang || '',
+                            type:   'AVPLAY_EMBED',
+                            // Only count as active if it's the currently selected
+                            // TEXT track AND no external sub is overriding it.
+                            active: (!currentExternalSub && t.index === activeTextIdx)
                         });
                     }
                 }
             } catch (e) {}
+
             // External sibling subtitle files — always listed; this is the
             // reliable rendering path on this firmware.  Extracted-from-MP4
             // subs live in the same array but get a slightly different label
@@ -874,12 +896,22 @@ var Player = (function () {
                 var s = playerSubtitles[k];
                 var label = (s.lang ? '[' + s.lang.toUpperCase() + '] ' : '') + s.name;
                 out.subtitle.push({
-                    index: 'ext:' + k,
-                    name:  label,
-                    lang:  s.lang || '',
-                    type:  s._extracted ? 'AVPLAY_EXTRACTED' : 'AVPLAY_EXTERNAL'
+                    index:  'ext:' + k,
+                    name:   label,
+                    lang:   s.lang || '',
+                    type:   s._extracted ? 'AVPLAY_EXTRACTED' : 'AVPLAY_EXTERNAL',
+                    active: (currentExternalSub === s)
                 });
             }
+
+            // "Off" entry is the default in out.subtitle[0].  It's active when
+            // nothing else is — i.e. no external sub picked AND no embedded
+            // TEXT track being rendered.
+            var anySubActive = false;
+            for (var si = 1; si < out.subtitle.length; si++) {
+                if (out.subtitle[si].active) { anySubActive = true; break; }
+            }
+            out.subtitle[0].active = !anySubActive;
             return out;
         }
 
