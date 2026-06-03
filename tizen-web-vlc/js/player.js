@@ -100,22 +100,18 @@ var Player = (function () {
      * setSilentSubtitle(false) to make it deliver cues via the
      * onsubtitlechange callback.
      *
-     * BUG: on Tizen 5.0 this call triggers a silent seek to ~midway in
-     * the file when invoked AFTER play() has started.  Workarounds:
-     *   - Pre-apply BEFORE play() in avOpen's prepare callback (no seek).
-     *   - For mid-playback switches, save currentTime before the call
-     *     and seek back if the playhead drifted.
-     *   - No-op if the same subtitle is already active. */
+     * BUG: on Tizen 5.0 this call triggers a silent seek to ~midway in the
+     * file when invoked AFTER play() has started.  So we only use it BEFORE
+     * play() (avOpen's prepare callback, READY state — no seek).  Every
+     * mid-playback switch goes through applyExternalSubtitleLive() instead,
+     * which renders with the JS time-poller and never moves the playhead. */
     var currentExternalSub = null;
-    /* Set when setExternalSubtitlePath was called from a non-IDLE state and
-     * we need to verify the playhead survived.  Two firing paths cover both
-     * timings of the bug:
-     *   - Polled every 250 ms for 4 s right after the call (catches the
-     *     bug if the seek fires while AVPlay is in PLAYING state).
-     *   - Re-checked on the next play() resumption — needed because in the
-     *     PAUSED state the seek doesn't fire until play() is issued. */
-    var pendingPlayheadMs = -1;
-    var pendingPlayheadPoller = null;
+    /* Pre-play ONLY: apply an external subtitle through AVPlay's native
+     * setExternalSubtitlePath while AVPlay is still in the READY state (i.e.
+     * from inside the prepareAsync callback, before play()).  In that state
+     * the call is safe.  Invoked mid-playback it triggers a silent seek to
+     * mid-file on Tizen 5.0 — for that case use applyExternalSubtitleLive()
+     * instead, which never moves the playhead.  Returns true on success. */
     function setAvExternalSubtitle(sub) {
         if (!sub) return false;
         if (currentExternalSub === sub) return true;      // already loaded
@@ -126,15 +122,7 @@ var Player = (function () {
         }
         if (!path) return false;
 
-        var savedMs = 0;
-        var savedState = 'NONE';
-        try {
-            savedState = av().getState();
-            savedMs    = av().getCurrentTime();
-        } catch (e) {}
-        var needsRestore = (savedState === 'PLAYING' || savedState === 'PAUSED') && savedMs > 500;
-
-        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath ' + path + ' (state=' + savedState + ' savedMs=' + savedMs + ')');
+        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath (pre-play) ' + path);
         try {
             av().setExternalSubtitlePath(path);
         } catch (e) {
@@ -143,76 +131,26 @@ var Player = (function () {
         }
         try { av().setSilentSubtitle(false); } catch (e) {}
         currentExternalSub = sub;
-
-        if (needsRestore) {
-            pendingPlayheadMs = savedMs;
-            // Path 1: poll while currently playing — catches the immediate
-            // seek when state==PLAYING at call time.
-            clearInterval(pendingPlayheadPoller);
-            var ticks = 0;
-            pendingPlayheadPoller = setInterval(function () {
-                ticks++;
-                try {
-                    var now = av().getCurrentTime();
-                    if (Math.abs(now - savedMs) > 1500) {
-                        if (typeof Debug !== 'undefined')
-                            Debug.warn('playhead jump after setExternalSubtitlePath (now=' + now +
-                                       ' saved=' + savedMs + ') — restoring');
-                        try { av().seekTo(savedMs); } catch (e) {}
-                        clearInterval(pendingPlayheadPoller);
-                        pendingPlayheadPoller = null;
-                        pendingPlayheadMs = -1;
-                        return;
-                    }
-                } catch (e) {}
-                if (ticks >= 16) {       // 16 × 250 = 4 s
-                    clearInterval(pendingPlayheadPoller);
-                    pendingPlayheadPoller = null;
-                    // Leave pendingPlayheadMs set; play() will pick it up.
-                }
-            }, 250);
-        }
         return true;
     }
 
-    /* Called by play() in the AVPlay branch — handles path 2 of the seek-
-     * restore: when subtitle was changed while paused, the seek bug doesn't
-     * fire until play() resumes.  This runs another 4-second poll after
-     * resumption. */
-    function avResumeWithPossibleRestore() {
-        if (pendingPlayheadMs < 0) return;
-        var target = pendingPlayheadMs;
-        // Don't clear yet — let the poller below decide.
-        clearInterval(pendingPlayheadPoller);
-        var ticks = 0;
-        pendingPlayheadPoller = setInterval(function () {
-            ticks++;
-            try {
-                var now = av().getCurrentTime();
-                if (Math.abs(now - target) > 1500) {
-                    if (typeof Debug !== 'undefined')
-                        Debug.warn('playhead jump after resume (now=' + now + ' target=' + target + ') — restoring');
-                    try { av().seekTo(target); } catch (e) {}
-                    clearInterval(pendingPlayheadPoller);
-                    pendingPlayheadPoller = null;
-                    pendingPlayheadMs = -1;
-                    return;
-                }
-                // If we've drifted naturally past target+wall-clock, the bug
-                // didn't fire — clean up.
-                if (now > target + 2000) {
-                    clearInterval(pendingPlayheadPoller);
-                    pendingPlayheadPoller = null;
-                    pendingPlayheadMs = -1;
-                    return;
-                }
-            } catch (e) {}
-            if (ticks >= 16) {
-                clearInterval(pendingPlayheadPoller);
-                pendingPlayheadPoller = null;
-                pendingPlayheadMs = -1;
-            }
-        }, 250);
+    /* Mid-playback external-subtitle switch that does NOT touch playback
+     * state — this is the fix for the sub-switch flicker (issue #4).
+     *
+     * AVPlay's setExternalSubtitlePath() seeks to mid-file when called during
+     * PLAYING/PAUSED on Tizen 5.0; the old workaround detected that jump and
+     * seeked back, and that seek-and-restore WAS the visible flicker.  Here we
+     * skip the native call entirely and render cues with the JS time-poller
+     * (reads getCurrentTime and paints the overlay), so the playhead never
+     * moves.  AVPlay's own (broken) renderer is silenced so only our overlay
+     * shows.  Visually identical to the native path — same #subtitle-overlay —
+     * minus the jump. */
+    function applyExternalSubtitleLive(sub) {
+        if (!sub) return false;
+        try { av().setSilentSubtitle(true); } catch (e) {}
+        startExternalSubtitle(sub);
+        currentExternalSub = sub;
+        return true;
     }
 
     /* Pick the best external subtitle for a given language preference, used
@@ -641,8 +579,8 @@ var Player = (function () {
      *
      * Fire-and-forget — extraction runs in parallel with avOpen().  If the
      * user has a preferred subtitle language and the matching track gets
-     * extracted, we apply it after the fact (setAvExternalSubtitle has its
-     * own seek-bug recovery for the mid-playback case). */
+     * extracted, we apply it after the fact via applyExternalSubtitleLive(),
+     * which renders without seeking the playhead. */
     var lastExtractToken = 0;
     function extractAndAppendEmbeddedSubs(url) {
         var lower = String(url || '').toLowerCase().split('?')[0];
@@ -715,7 +653,9 @@ var Player = (function () {
         if (pick) {
             if (typeof Debug !== 'undefined')
                 Debug.player('auto-apply extracted sub after open: ' + pick.name);
-            setAvExternalSubtitle(pick);
+            // Extraction finishes after play() has started, so this is a
+            // mid-playback apply — use the no-seek poller path.
+            applyExternalSubtitleLive(pick);
         }
     }
 
@@ -771,7 +711,6 @@ var Player = (function () {
         else if (backend === BACKEND_AVPLAY) {
             try { av().play(); } catch (e) {}
             emit('onstatechange', 'playing');
-            avResumeWithPossibleRestore();
         }
     }
     function pause() {
@@ -788,9 +727,6 @@ var Player = (function () {
         stopExternalSubtitle();
         hideSubtitleText();
         currentExternalSub = null;
-        clearInterval(pendingPlayheadPoller);
-        pendingPlayheadPoller = null;
-        pendingPlayheadMs = -1;
         // Always fully tear down BOTH backends — some firmwares leave the
         // hidden one alive (auto-replaying audio on view switch).
         var v = h5el();
@@ -1013,25 +949,21 @@ var Player = (function () {
             // "Off"
             if (index === -1 || index === undefined || index === 'off') {
                 try { av().setSilentSubtitle(true); } catch (e) {}
+                currentExternalSub = null;   // allow re-selecting the same sub later
                 return;
             }
 
-            // External subtitle file: prefer AVPlay's setExternalSubtitlePath
-            // (Samsung-recommended path — fires onsubtitlechange per cue).
-            // If that fails, fall back to our JS time-poller.
+            // External subtitle file: render via the JS time-poller so the
+            // switch doesn't seek (see applyExternalSubtitleLive).  This is a
+            // mid-playback switch by definition — the CC menu is only reachable
+            // once the OSD is up, i.e. after playback has started.
             if (typeof index === 'string' && index.indexOf('ext:') === 0) {
                 var k = parseInt(index.slice(4), 10);
                 var sub = playerSubtitles[k];
                 if (!sub) return;
-                if (setAvExternalSubtitle(sub)) {
-                    if (typeof Debug !== 'undefined')
-                        Debug.player('external sub via AVPlay: ' + sub.name);
-                } else {
-                    if (typeof Debug !== 'undefined')
-                        Debug.player('AVPlay external-sub API failed; using JS poller for ' + sub.name);
-                    try { av().setSilentSubtitle(true); } catch (e) {}
-                    startExternalSubtitle(sub);
-                }
+                applyExternalSubtitleLive(sub);
+                if (typeof Debug !== 'undefined')
+                    Debug.player('external sub via JS poller (no-seek): ' + sub.name);
                 return;
             }
 
