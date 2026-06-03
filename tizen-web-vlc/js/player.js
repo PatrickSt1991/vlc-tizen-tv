@@ -960,21 +960,32 @@ var Player = (function () {
 
     function setAudioTrack(index) {
         if (backend === BACKEND_AVPLAY) {
-            /* Tizen 5.0 quirk: setSelectTrack('AUDIO', N) registers the new
-             * track index, but the audio decoder keeps using whatever frames
-             * it had already buffered with the previous track — so the user
-             * hears no change until the buffer drains (often never, if the
-             * buffer is large).  Force a buffer flush by seeking to a point
-             * slightly behind the current playhead.  Tiny rewind (~750 ms)
-             * is barely audible and makes AVPlay rebuild the audio pipeline
-             * with the new track immediately. */
+            /* Tizen 5.0 firmware bugs piled on each other:
+             *   1. setSelectTrack('AUDIO', N) throws PLAYER_ERROR_INVALID_OPERATION
+             *      when AVPlay is in the PAUSED state — so to swap while
+             *      paused we have to briefly resume, swap, then re-pause.
+             *   2. Even when accepted in PLAYING, the audio decoder keeps
+             *      draining whatever it had already buffered with the old
+             *      track — so the user hears no change unless we force a
+             *      buffer flush.  A small seek backward (~750 ms) does it.
+             *
+             * Sequence:
+             *   - record saved state + time + current AUDIO index
+             *   - if PAUSED, av().play() to leave the invalid-op state
+             *   - setSelectTrack('AUDIO', N)
+             *   - seekTo(saved-750) to flush old buffered audio
+             *   - if originally PAUSED, av().pause() (with a small delay so
+             *     the swap can settle before we cycle state again).
+             *
+             * Cost: ~200 ms of visible playback when the user does this
+             * while paused.  Better than the previous "nothing happens".
+             */
             var savedMs = 0;
             var savedState = 'NONE';
             try {
                 savedState = av().getState();
                 savedMs    = av().getCurrentTime();
             } catch (e) {}
-            // Log what AVPlay thinks is currently selected, for comparison.
             var beforeIdx = -1;
             try {
                 var before = av().getCurrentStreamInfo();
@@ -987,30 +998,56 @@ var Player = (function () {
             if (typeof Debug !== 'undefined')
                 Debug.player('setSelectTrack AUDIO ' + index + ' (state=' + savedState +
                              ' t=' + savedMs + 'ms before=' + beforeIdx + ')');
+
+            var resumedFromPause = false;
+            if (savedState === 'PAUSED') {
+                try {
+                    av().play();
+                    resumedFromPause = true;
+                    if (typeof Debug !== 'undefined') Debug.player('  briefly resuming PAUSED → PLAYING for setSelectTrack');
+                } catch (e) {
+                    if (typeof Debug !== 'undefined') Debug.warn('  could not resume to PLAYING: ' + (e.message || e));
+                }
+            }
+
             try {
                 av().setSelectTrack('AUDIO', index);
             } catch (e) {
                 if (typeof Debug !== 'undefined') Debug.error('setSelectTrack AUDIO threw: ' + (e.message || e));
+                if (resumedFromPause) { try { av().pause(); } catch (e2) {} }
                 return;
             }
-            // Confirm AVPlay actually registered the change.
-            var afterIdx = -1;
+
+            // Flush old buffer.  Skip near start-of-file (nothing buffered to flush).
+            if (savedMs > 1000) {
+                var flushTo = Math.max(0, savedMs - 750);
+                try { av().seekTo(flushTo); } catch (e) {}
+                if (typeof Debug !== 'undefined') Debug.player('  audio-track flush seek → ' + flushTo + 'ms');
+            }
+
+            // Confirm the change registered.
             try {
                 var after = av().getCurrentStreamInfo();
                 if (after && after.length) {
                     for (var ai = 0; ai < after.length; ai++) {
-                        if (after[ai].type === 'AUDIO') { afterIdx = after[ai].index; break; }
+                        if (after[ai].type === 'AUDIO') {
+                            if (typeof Debug !== 'undefined')
+                                Debug.player('  getCurrentStreamInfo now reports AUDIO index=' + after[ai].index);
+                            break;
+                        }
                     }
                 }
             } catch (e) {}
-            if (typeof Debug !== 'undefined')
-                Debug.player('  setSelectTrack AUDIO returned; getCurrentStreamInfo now reports index=' + afterIdx);
-            // Flush by seeking to ~750 ms behind the playhead.  Skip when
-            // we're near the start (under 1 s in) — nothing to flush yet.
-            if (savedMs > 1000 && (savedState === 'PLAYING' || savedState === 'PAUSED')) {
-                var flushTo = Math.max(0, savedMs - 750);
-                try { av().seekTo(flushTo); } catch (e) {}
-                if (typeof Debug !== 'undefined') Debug.player('  audio-track flush seek → ' + flushTo + 'ms');
+
+            if (resumedFromPause) {
+                /* Defer the re-pause briefly.  Without the delay AVPlay
+                 * processes pause() before the swap can take effect and the
+                 * track change gets lost (decoder freezes on the old track
+                 * instead).  200 ms is enough for the swap + flush to settle. */
+                setTimeout(function () {
+                    try { av().pause(); } catch (e) {}
+                    if (typeof Debug !== 'undefined') Debug.player('  audio-track: re-paused after swap');
+                }, 200);
             }
             return;
         }
