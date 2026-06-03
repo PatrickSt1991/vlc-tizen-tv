@@ -692,6 +692,39 @@ button:focus { outline: none; }
 .tvinfo .codec .status.maybe { color: var(--accent-2); }
 .tvinfo .codec .status.no    { color: var(--danger); }
 
+/* "Support this app" Ko-fi block */
+.support-block {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 24px 28px;
+    margin-bottom: 24px;
+}
+.support-qr {
+    flex: 0 0 200px;
+    width: 200px;
+    height: 200px;
+    background: #fff;       /* keep QR readable on dark surfaces */
+    padding: 10px;
+    border-radius: 12px;
+    image-rendering: pixelated;
+}
+.support-text { flex: 1; }
+.support-headline {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 6px;
+}
+.support-hint {
+    font-size: 18px;
+    color: var(--fg-mute);
+    line-height: 1.5;
+}
+
 /* ── Picker overlay (settings options, modal) ────────────────────── */
 .picker {
     position: fixed;
