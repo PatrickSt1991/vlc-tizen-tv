@@ -102,7 +102,7 @@
       </div>
       <button class="btn-ghost savebtn" id="savecode" type="button">Save</button>
     </div>
-    <p class="hint">On the TV: <b>Open Network Stream &rarr; Get URL from phone</b>. The code is shown there. You only enter it once.</p>
+    <p class="hint">On the TV: <b>Open Network Stream &rarr; Get URL from device</b>. The code is shown there. You only enter it once.</p>
   </section>
 
   <section class="card">
@@ -111,7 +111,7 @@
            placeholder="https://&hellip; &middot; rtsp://&hellip; &middot; &hellip;/playlist.m3u8">
     <button class="btn-primary" id="send" type="button">Send to TV</button>
     <p id="status"></p>
-    <p class="hint">After sending, press <b>Get URL from phone</b> on the TV to play it.</p>
+    <p class="hint">After sending, press <b>Get URL from device</b> on the TV to play it.</p>
   </section>
 
   <footer>no app, no account &mdash; uses ntfy.sh</footer>
@@ -148,7 +148,7 @@
       method: 'POST', body: url, headers: { 'Title': 'VLC TV URL' }
     })
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status);
-      setStatus('Sent \u2014 now press \u201CGet URL from phone\u201D on the TV', 'ok'); })
+      setStatus('Sent \u2014 now press \u201CGet URL from device\u201D on the TV', 'ok'); })
     .catch(function (e) { setStatus('Failed to send (' + e.message + ')', 'bad'); })
     .then(function () { $('send').disabled = false; });
   }
