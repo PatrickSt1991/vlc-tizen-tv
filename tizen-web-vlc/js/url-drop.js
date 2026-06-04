@@ -25,7 +25,7 @@ var UrlDrop = (function () {
     var CODE_KEY   = 'urlDropCode';
     var NTFY_BASE  = 'https://ntfy.sh';
     // GitHub Pages page users open on their phone (deploy docs/index.html).
-    var PHONE_PAGE = 'https://patrickst1991.github.io/vlc-tizen-tv/';
+    var PHONE_PAGE = 'https://vlc-tizen.madebypatrick.nl/';
 
     function log(m) { if (typeof Debug !== 'undefined' && Debug.net) Debug.net('[url-drop] ' + m); }
 

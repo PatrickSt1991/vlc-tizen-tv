@@ -21,15 +21,17 @@ Cast from another device**, together with a QR code. Scan the QR (or enter the
 code once — the browser remembers it) and you're paired. The topic is
 `vlctv-<code>`.
 
-## Deploy the device page
+## Host the device page
 
-The page is `docs/index.html`. Enable GitHub Pages on the repo:
+The page is `docs/index.html` (plus `icon.png`). Serve it over **HTTPS** at the
+URL set in `PHONE_PAGE` in `js/url-drop.js` — currently:
 
-> Settings → Pages → Source: **Deploy from a branch** → `main` / **`/docs`**
+`https://vlc-tizen.madebypatrick.nl/`
 
-It is served at `https://patrickst1991.github.io/vlc-tizen-tv/`, which is the
-default `PHONE_PAGE` baked into `js/url-drop.js`. (Change that constant if you
-host the page elsewhere.)
+HTTPS is required: the page POSTs to `https://ntfy.sh`, so a plain-HTTP page is
+blocked by the browser as mixed content and sending fails silently. Any static
+host works — your own domain, or GitHub Pages (optionally with a custom domain
+via a `CNAME` file in `docs/`).
 
 ## Use it
 

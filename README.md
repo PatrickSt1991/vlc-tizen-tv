@@ -16,6 +16,9 @@ with VLC-inspired UI and TV remote-friendly navigation.
   AAC / MP3 / AC3 / EAC3 / DTS, HLS / MPEG-DASH / RTSP / RTMP / Smooth-Streaming
 - **File browser** for USB drives + built-in storage (Videos, Downloads, etc.)
 - **Network stream input** with preset chips for quick testing
+- **Cast from any device** — paste a stream URL from your phone, tablet or
+  laptop instead of typing on the remote; QR pairing, no companion app, no
+  account, and no relay to host
 - **Recent history** of last 20 played items
 - **VLC-style UI** — dark slate-blue theme matching the cone icon
 - **Full TV remote support** — D-pad navigation, OK/BACK, media keys
@@ -94,6 +97,53 @@ The home screen has tap-to-fill chips for these:
 | MPEG-DASH | `https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd` |
 | RTSP (public) | `rtsp://170.93.143.139:554/rtplive/470011e600ef003a004ee33696235daa` |
 
+## Cast a link from your phone, tablet or laptop
+
+Typing URLs on a TV remote is painful, so VLC TV lets you paste a stream URL
+from another device instead — **no companion app, no account, and no server you
+have to run.**
+
+Open **Network Stream → 📲 Get URL from device**, or pair once from
+**Settings → Cast from another device** (scan the QR, or enter the short code).
+On your phone or laptop, open the pairing page, paste a URL, tap **Send to TV**,
+then press **Get URL from device** on the TV — it plays.
+
+### How it works
+
+A Tizen `.wgt` runs in the TV's sandboxed WebView, which can't open a listening
+socket — so the TV can never be a server (the same wall that rules out a
+VLC-style built-in web interface). Instead the TV is a *client*:
+
+```
+ device page  ──POST──▶  ntfy.sh/vlctv-<code>  ◀──GET──  VLC TV
+```
+
+The device POSTs the URL to a free public [ntfy.sh](https://ntfy.sh) topic; the
+TV pulls the latest message on a button press. Each TV mints a long random
+pairing code once, so the topic (`vlctv-<code>`) is private-by-obscurity. The QR
+encodes the page URL with the code in the hash, so scanning opens the page
+already paired — and the QR is generated **on the TV, offline** (bundled
+`qrcode.js`), so the code never touches a third-party QR service.
+
+> **Privacy:** a public topic is readable by anyone who knows the code, which is
+> why the code is long and random. Fine for public stream URLs — don't push
+> anything secret through it.
+
+### Hosting the pairing page
+
+The pairing page is a single static file (`docs/index.html` + `icon.png`),
+served at the URL set in `js/url-drop.js`:
+
+```js
+var PHONE_PAGE = 'https://vlc-tizen.madebypatrick.nl/';
+```
+
+Host it anywhere static, over **HTTPS** (required — the page POSTs to
+`https://ntfy.sh`, so plain HTTP is blocked as mixed content). Own domain or
+GitHub Pages both work. To own the rendezvous too, ntfy self-hosts as a single
+binary, or flip to the built-in n8n adapter in `url-drop.js`. Details:
+[docs/SEND-URL-FROM-DEVICE.md](docs/SEND-URL-FROM-DEVICE.md).
+
 ## Architecture
 
 ```
@@ -109,6 +159,8 @@ tizen-web-vlc/
 │   ├── ui.js           Focus management + view switching + toast
 │   ├── browser.js      USB / Tizen filesystem enumeration
 │   ├── player.js       Samsung AVPlay wrapper (HLS/DASH/RTSP/files)
+│   ├── url-drop.js     "Cast from any device" — pulls a URL via ntfy.sh
+│   ├── qrcode.js       Offline QR generator (MIT, Kazuhiko Arase) for pairing
 │   └── app.js          Top-level coordinator
 └── build.sh            Local zip-only builder (no signing)
 ```
