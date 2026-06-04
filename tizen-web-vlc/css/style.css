@@ -232,12 +232,16 @@ button:focus { outline: none; }
     transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease;
 }
 .btn.primary {
-    background: var(--accent);
-    color: #102035;
+    /* Resting primary: a faint tint + accent label, so it reads as the main
+     * action WITHOUT looking like the solid accent focus highlight. */
+    background: var(--accent-soft);
+    color: var(--accent-2);
     font-weight: 600;
 }
 .btn.primary:focus, .btn.primary.focused {
-    background: var(--accent-2);
+    /* Solid fill + glow only when it actually has focus. */
+    background: var(--accent);
+    color: #102035;
     transform: scale(1.04);
     box-shadow: 0 0 0 6px var(--accent-soft);
 }
