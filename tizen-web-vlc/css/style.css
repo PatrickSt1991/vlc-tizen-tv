@@ -778,3 +778,13 @@ button:focus { outline: none; }
     z-index: 1000;
     border: 1px solid var(--border);
 }
+
+/* ── URL-drop pairing hint (network view) ───────────────────────────── */
+.url-drop-hint {
+    margin: 14px 2px 0;
+    color: #8499b3;
+    font-size: 17px;
+    line-height: 1.5;
+}
+.url-drop-hint b { color: #ff8800; font-weight: 600; word-break: break-all; }
+.url-drop-hint:empty { display: none; }

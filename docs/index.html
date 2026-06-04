@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1622">
+<title>Send URL to VLC TV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0e1622; --bg-2:#142031; --panel:#18263a; --line:#243349;
+    --ink:#e7eef7; --muted:#8499b3; --cone:#ff8800; --ok:#46d18a; --bad:#e2575b;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; min-height:100%; }
+  body {
+    background: radial-gradient(120% 80% at 50% -10%, #1b2c45 0%, var(--bg) 55%) fixed;
+    color:var(--ink); font-family:"Bricolage Grotesque",system-ui,sans-serif;
+    display:flex; flex-direction:column; min-height:100dvh;
+    padding: env(safe-area-inset-top) 18px calc(env(safe-area-inset-bottom) + 18px);
+  }
+  .mono { font-family:"DM Mono",ui-monospace,monospace; }
+  header { display:flex; align-items:center; gap:11px; padding:22px 2px 16px; }
+  .cone { width:28px; height:32px; flex:none; filter:drop-shadow(0 2px 4px rgba(0,0,0,.5)); }
+  h1 { font-size:20px; font-weight:700; margin:0; letter-spacing:.3px; }
+  h1 .tag { color:var(--cone); }
+  .card {
+    background:linear-gradient(180deg,var(--panel),var(--bg-2));
+    border:1px solid var(--line); border-radius:16px;
+    box-shadow:0 8px 30px rgba(0,0,0,.45); padding:20px; margin-bottom:14px;
+  }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:8px;
+          letter-spacing:.5px; text-transform:uppercase; }
+  input {
+    width:100%; background:#0c131e; border:1px solid var(--line); border-radius:12px;
+    color:var(--ink); padding:14px; font-size:16px; font-family:"DM Mono",monospace;
+  }
+  input:focus { outline:none; border-color:var(--cone); }
+  #code { letter-spacing:3px; text-align:center; }
+  #url { margin-top:4px; }
+  button {
+    width:100%; margin-top:16px; padding:16px; font-family:inherit; font-weight:700;
+    font-size:17px; border:none; border-radius:12px; color:var(--bg); background:var(--cone);
+    cursor:pointer; transition:transform .06s ease, filter .15s ease;
+  }
+  button:active { transform:scale(.98); }
+  button:disabled { opacity:.4; }
+  .row { display:flex; gap:10px; align-items:flex-end; }
+  .row .grow { flex:1; min-width:0; }
+  .saved { padding:0 16px; height:50px; margin-top:0; width:auto; font-size:14px;
+           background:var(--bg-2); color:var(--cone); border:1px solid var(--cone); }
+  #status { margin:14px 2px 0; font-size:14px; min-height:20px; font-family:"DM Mono",monospace; }
+  #status.ok  { color:var(--ok); }
+  #status.bad { color:var(--bad); }
+  .hint { color:var(--muted); font-size:13px; line-height:1.55; margin:6px 2px 0; }
+  footer { margin-top:auto; padding-top:18px; text-align:center; color:var(--muted);
+           font-size:12px; font-family:"DM Mono",monospace; }
+  .stripes { height:3px; border-radius:3px; margin-top:12px;
+             background:repeating-linear-gradient(45deg,var(--cone) 0 8px,transparent 8px 16px); opacity:.6; }
+</style>
+</head>
+<body>
+  <header>
+    <svg class="cone" viewBox="0 0 64 72" aria-hidden="true">
+      <path d="M32 2 L54 64 H10 Z" fill="#ff8800"/>
+      <path d="M27 20 h10 l2 8 h-14 z M22 40 h20 l3 12 H19 z" fill="#0e1622"/>
+      <rect x="6" y="64" width="52" height="6" rx="3" fill="#d9d9d9"/>
+    </svg>
+    <h1>Send to <span class="tag">VLC&nbsp;TV</span></h1>
+  </header>
+
+  <section class="card">
+    <label for="code">Pairing code (shown on your TV)</label>
+    <div class="row">
+      <div class="grow">
+        <input id="code" class="mono" inputmode="text" autocomplete="off" spellcheck="false" placeholder="paste your code">
+      </div>
+      <button class="saved" id="savecode" type="button">Save</button>
+    </div>
+    <p class="hint">On the TV: <b>Open Network Stream → 📲 Get URL from phone</b>. The code is shown there. You only enter it once.</p>
+  </section>
+
+  <section class="card">
+    <label for="url">Stream URL</label>
+    <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+           placeholder="https://… · rtsp://… · …/playlist.m3u8">
+    <button id="send" type="button">Send to TV</button>
+    <p id="status"></p>
+    <p class="hint">After sending, press <b>📲 Get URL from phone</b> on the TV to play it.</p>
+  </section>
+
+  <footer>
+    no app, no account — uses ntfy.sh
+    <div class="stripes"></div>
+  </footer>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var NTFY = 'https://ntfy.sh';
+  var LS_CODE = 'vlctv_drop_code';
+
+  // Code priority: URL hash (#abc123) > saved > empty.
+  var fromHash = (location.hash || '').replace('#', '').trim();
+  var saved = '';
+  try { saved = localStorage.getItem(LS_CODE) || ''; } catch (e) {}
+  var initial = fromHash || saved;
+  if (initial) $('code').value = initial;
+
+  function persist(code) { try { localStorage.setItem(LS_CODE, code); } catch (e) {} }
+
+  function setStatus(text, kind) {
+    var el = $('status');
+    el.textContent = text || '';
+    el.className = kind || '';
+  }
+
+  $('savecode').addEventListener('click', function () {
+    var c = ($('code').value || '').trim();
+    if (!c) { $('code').focus(); return; }
+    persist(c);
+    setStatus('Code saved ✓', 'ok');
+  });
+
+  function send() {
+    var code = ($('code').value || '').trim();
+    var url  = ($('url').value || '').trim();
+    if (!code) { setStatus('Enter the pairing code first', 'bad'); $('code').focus(); return; }
+    if (!url)  { setStatus('Paste a URL first', 'bad'); $('url').focus(); return; }
+
+    persist(code);
+    setStatus('Sending…', '');
+    $('send').disabled = true;
+
+    fetch(NTFY + '/' + encodeURIComponent('vlctv-' + code), {
+      method: 'POST',
+      body: url,
+      headers: { 'Title': 'VLC TV URL', 'X-Priority': 'default' }
+    })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      setStatus('Sent ✓  — now press “Get URL from phone” on the TV', 'ok');
+    })
+    .catch(function (e) {
+      setStatus('Failed to send (' + e.message + ')', 'bad');
+    })
+    .then(function () { $('send').disabled = false; });
+  }
+
+  $('send').addEventListener('click', send);
+  $('url').addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
+
+  // Optional share-target convenience: ?url=… prefills the field.
+  var qUrl = new URLSearchParams(location.search).get('url');
+  if (qUrl) $('url').value = qUrl;
+})();
+</script>
+</body>
+</html>

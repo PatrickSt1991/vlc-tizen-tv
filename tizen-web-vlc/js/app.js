@@ -174,7 +174,7 @@
     function handleAction(action, el) {
         if (typeof Debug !== 'undefined') Debug.action(action);
         switch (action) {
-            case 'open-url':           UI.showView('view-url'); state.view = 'url'; break;
+            case 'open-url':           UI.showView('view-url'); state.view = 'url'; renderUrlDropHint(); break;
             case 'browse-usb':         openBrowserAtRoot(); break;
             case 'browse-recent':      openRecent(); break;
             case 'open-settings':      openSettings(); break;
@@ -184,6 +184,7 @@
                 else UI.toast('Enter a URL first');
                 break;
             }
+            case 'fetch-remote-url':   fetchRemoteUrl(); break;
             case 'back-home':          backToHome(); break;
             case 'play-pause':         Player.togglePause(); scheduleOSDHide(); break;
             case 'stop':               exitPlayer(); break;
@@ -212,6 +213,37 @@
         state.playlist  = [{ uri: url, title: title }];
         state.playlistIndex = 0;
         playUri(url, title);
+    }
+
+    /* ── URL drop (paste-from-phone) ──────────────────
+     * Pull the most recent URL the user pasted on their phone and play it.
+     * The field is filled first so the URL is visible if playback fails. */
+    function fetchRemoteUrl() {
+        if (typeof UrlDrop === 'undefined') { UI.toast('URL drop unavailable'); return; }
+        UI.toast('Checking your phone…');
+        UrlDrop.fetchLatest(function (err, url) {
+            if (err) {
+                if (typeof Debug !== 'undefined') Debug.error('url-drop: ' + err);
+                UI.toast('Could not reach the URL service');
+                return;
+            }
+            if (!url) {
+                UI.toast('Nothing waiting — paste a URL on your phone first');
+                return;
+            }
+            var input = document.getElementById('url-input');
+            if (input) input.value = url;
+            UI.toast('Got it — playing');
+            openUrl(url);
+        });
+    }
+
+    function renderUrlDropHint() {
+        var el = document.getElementById('url-drop-hint');
+        if (!el || typeof UrlDrop === 'undefined') return;
+        el.innerHTML = '📲 Paste URLs from your phone — open <b>' +
+            escapeHtml(UrlDrop.phoneUrl()) + '</b> · code <b>' +
+            escapeHtml(UrlDrop.code()) + '</b>';
     }
     function urlBaseName(url) {
         try {
