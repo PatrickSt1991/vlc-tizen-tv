@@ -696,7 +696,6 @@ button:focus { outline: none; }
 .support-block {
     display: flex;
     align-items: center;
-    gap: 28px;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--r);
@@ -711,6 +710,7 @@ button:focus { outline: none; }
     padding: 10px;
     border-radius: 12px;
     image-rendering: pixelated;
+    margin-right: 32px;     /* flex `gap` is unsupported on the TV WebView (Chromium 63) */
 }
 .support-text { flex: 1; }
 .support-headline {
@@ -790,6 +790,11 @@ button:focus { outline: none; }
 .url-drop-hint:empty { display: none; }
 
 /* ── Pairing block (Settings → Cast from another device) ─────────────── */
+.cast-hint {
+    font-size: 22px;
+    color: var(--fg-mute);
+    line-height: 1.7;       /* doubles as spacing between the two lines */
+}
 .pair-emph {
     color: var(--accent);
     font-family: 'Consolas', monospace;
