@@ -788,3 +788,12 @@ button:focus { outline: none; }
 }
 .url-drop-hint b { color: #ff8800; font-weight: 600; word-break: break-all; }
 .url-drop-hint:empty { display: none; }
+
+/* ── Pairing block (Settings → Cast from another device) ─────────────── */
+.pair-emph {
+    color: var(--accent);
+    font-family: 'Consolas', monospace;
+    word-break: break-all;
+}
+#pair-qr { display: flex; align-items: center; justify-content: center; }
+#pair-qr img { display: block; border-radius: 4px; }

@@ -174,7 +174,7 @@
     function handleAction(action, el) {
         if (typeof Debug !== 'undefined') Debug.action(action);
         switch (action) {
-            case 'open-url':           UI.showView('view-url'); state.view = 'url'; renderUrlDropHint(); break;
+            case 'open-url':           UI.showView('view-url'); state.view = 'url'; break;
             case 'browse-usb':         openBrowserAtRoot(); break;
             case 'browse-recent':      openRecent(); break;
             case 'open-settings':      openSettings(); break;
@@ -215,12 +215,13 @@
         playUri(url, title);
     }
 
-    /* ── URL drop (paste-from-phone) ──────────────────
-     * Pull the most recent URL the user pasted on their phone and play it.
-     * The field is filled first so the URL is visible if playback fails. */
+    /* ── URL drop (paste from any device) ─────────────────────────────
+     * Pull the most recent URL the user pasted from their phone/tablet/laptop
+     * and play it. The field is filled first so the URL is visible if
+     * playback fails. Pairing (code + QR) lives in Settings. */
     function fetchRemoteUrl() {
         if (typeof UrlDrop === 'undefined') { UI.toast('URL drop unavailable'); return; }
-        UI.toast('Checking your phone…');
+        UI.toast('Checking your device…');
         UrlDrop.fetchLatest(function (err, url) {
             if (err) {
                 if (typeof Debug !== 'undefined') Debug.error('url-drop: ' + err);
@@ -228,7 +229,7 @@
                 return;
             }
             if (!url) {
-                UI.toast('Nothing waiting — paste a URL on your phone first');
+                UI.toast('Nothing waiting — paste a URL on your device first');
                 return;
             }
             var input = document.getElementById('url-input');
@@ -238,12 +239,31 @@
         });
     }
 
-    function renderUrlDropHint() {
-        var el = document.getElementById('url-drop-hint');
-        if (!el || typeof UrlDrop === 'undefined') return;
-        el.innerHTML = '📲 Paste URLs from your phone — open <b>' +
-            escapeHtml(UrlDrop.phoneUrl()) + '</b> · code <b>' +
-            escapeHtml(UrlDrop.code()) + '</b>';
+    /* Pairing block in Settings: code + bare page URL + a locally-generated
+     * QR (encodes the page URL with the code in the hash, so scanning opens
+     * the device page already paired). QR is rendered offline — the code
+     * never leaves the TV via a third-party QR service. */
+    function renderPairingBlock() {
+        if (typeof UrlDrop === 'undefined') return;
+        var urlEl  = document.getElementById('pair-url');
+        var codeEl = document.getElementById('pair-code');
+        if (urlEl)  urlEl.textContent  = UrlDrop.pageUrl();
+        if (codeEl) codeEl.textContent = UrlDrop.code();
+
+        var qrEl = document.getElementById('pair-qr');
+        if (!qrEl) return;
+        if (typeof qrcode === 'undefined') { qrEl.textContent = ''; return; }
+        try {
+            var qr = qrcode(0, 'M');
+            qr.addData(UrlDrop.deviceUrl());
+            qr.make();
+            qrEl.innerHTML = '<img alt="Pairing QR code" ' +
+                'style="width:100%;height:100%;image-rendering:pixelated" src="' +
+                qr.createDataURL(8, 8) + '">';
+        } catch (e) {
+            if (typeof Debug !== 'undefined') Debug.error('pair-qr: ' + e);
+            qrEl.textContent = '';
+        }
     }
     function urlBaseName(url) {
         try {
@@ -617,6 +637,7 @@
     function openSettings() {
         UI.showView('view-settings'); state.view = 'settings';
         refreshSettingsValues();
+        renderPairingBlock();
         renderTvInfo();
     }
     function refreshSettingsValues() {

@@ -84,11 +84,11 @@
 
     <div class="actions">
         <button class="btn primary" data-action="open-current-url">Play</button>
-        <button class="btn ghost"   data-action="fetch-remote-url">📲 Get URL from phone</button>
+        <button class="btn ghost"   data-action="fetch-remote-url">📲 Get URL from device</button>
         <button class="btn ghost"   data-action="back-home">Cancel</button>
     </div>
 
-    <p class="url-drop-hint" id="url-drop-hint"></p>
+    <p class="url-drop-hint">Paste a URL from your phone, tablet or laptop — pair once under <b>Settings</b>.</p>
 </section>
 
 <!-- ── File browser view ─────────────────────────────────────────────── -->
@@ -199,6 +199,19 @@
             </button>
         </div>
 
+        <h2 class="settings-section-title">Cast from another device</h2>
+        <div class="support-block">
+            <div class="support-qr" id="pair-qr"></div>
+            <div class="support-text">
+                <div class="support-headline">Paste URLs from your phone, tablet or laptop</div>
+                <div class="support-hint">
+                    Scan the code, or open <span class="pair-emph" id="pair-url">…</span>
+                    on any device and enter code <span class="pair-emph" id="pair-code">…</span>.
+                    Then on the TV: <b>Open Network Stream → Get URL from device</b>.
+                </div>
+            </div>
+        </div>
+
         <h2 class="settings-section-title">TV Information</h2>
         <div class="tvinfo" id="tvinfo">Loading…</div>
     </div>
@@ -222,6 +235,7 @@
 <script src="js/mp4-subs.js"></script>
 <script src="js/mkv-subs.js"></script>
 <script src="js/player.js"></script>
+<script src="js/qrcode.js"></script>
 <script src="js/url-drop.js"></script>
 <script src="js/app.js"></script>
 </body>

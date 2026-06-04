@@ -46,8 +46,10 @@ var UrlDrop = (function () {
         return c;
     }
 
-    function topic()    { return 'vlctv-' + code(); }
-    function phoneUrl() { return PHONE_PAGE + '#' + code(); }
+    function topic()     { return 'vlctv-' + code(); }
+    function pageUrl()   { return PHONE_PAGE; }                 // bare page, easy to type
+    function deviceUrl() { return PHONE_PAGE + '#' + code(); }  // page + code, for the QR
+    function phoneUrl()  { return deviceUrl(); }                // back-compat alias
 
     function xhrGet(url, cb) {
         var done = false;
@@ -121,6 +123,8 @@ var UrlDrop = (function () {
     return {
         code:       code,
         topic:      topic,
+        pageUrl:    pageUrl,
+        deviceUrl:  deviceUrl,
         phoneUrl:   phoneUrl,
         fetchLatest: fetchLatest
     };
