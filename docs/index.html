@@ -3,98 +3,118 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0e1622">
+<meta name="theme-color" content="#1e2a3d">
+<link rel="icon" href="icon.png">
 <title>Send URL to VLC TV</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* Palette + type lifted straight from the app (tizen-web-vlc/css/style.css) */
   :root {
-    --bg:#0e1622; --bg-2:#142031; --panel:#18263a; --line:#243349;
-    --ink:#e7eef7; --muted:#8499b3; --cone:#ff8800; --ok:#46d18a; --bad:#e2575b;
+    --bg:        #1e2a3d;
+    --bg-2:      #283549;
+    --bg-card:   #2a3854;
+    --bg-card-h: #3a4a6a;
+    --fg:        #ffffff;
+    --fg-mute:   #d0dae5;
+    --fg-dim:    #8da0b8;
+    --accent:    #4fc3f7;
+    --accent-2:  #81d4fa;
+    --accent-soft: rgba(79,195,247,.18);
+    --danger:    #ff6b6b;
+    --border:    rgba(255,255,255,.08);
+    --shadow:    0 8px 32px rgba(0,0,0,.45);
+    --r:         16px;
+    --r-sm:      10px;
   }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { margin:0; min-height:100%; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; }
   body {
-    background: radial-gradient(120% 80% at 50% -10%, #1b2c45 0%, var(--bg) 55%) fixed;
-    color:var(--ink); font-family:"Bricolage Grotesque",system-ui,sans-serif;
-    display:flex; flex-direction:column; min-height:100dvh;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; min-height: 100dvh;
     padding: env(safe-area-inset-top) 18px calc(env(safe-area-inset-bottom) + 18px);
   }
-  .mono { font-family:"DM Mono",ui-monospace,monospace; }
-  header { display:flex; align-items:center; gap:11px; padding:22px 2px 16px; }
-  .cone { width:28px; height:32px; flex:none; filter:drop-shadow(0 2px 4px rgba(0,0,0,.5)); }
-  h1 { font-size:20px; font-weight:700; margin:0; letter-spacing:.3px; }
-  h1 .tag { color:var(--cone); }
+  code, .mono { font-family: 'Consolas', ui-monospace, monospace; }
+
+  /* Brand header — icon top-left, wordmark beside it (matches app .brand) */
+  header { display: flex; align-items: center; gap: 16px; padding: 22px 2px 18px; }
+  .cone-img { width: 52px; height: 52px; border-radius: 12px; flex-shrink: 0; box-shadow: var(--shadow); }
+  header h1 { margin: 0; font-size: 26px; font-weight: 200; letter-spacing: 1px; color: var(--fg); }
+  header h1 span { color: var(--accent); font-weight: 600; margin-left: 6px; }
+
   .card {
-    background:linear-gradient(180deg,var(--panel),var(--bg-2));
-    border:1px solid var(--line); border-radius:16px;
-    box-shadow:0 8px 30px rgba(0,0,0,.45); padding:20px; margin-bottom:14px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--r); box-shadow: var(--shadow);
+    padding: 20px; margin-bottom: 14px;
   }
-  label { display:block; font-size:12px; color:var(--muted); margin-bottom:8px;
-          letter-spacing:.5px; text-transform:uppercase; }
+  label {
+    display: block; font-size: 13px; color: var(--fg-mute);
+    text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px;
+  }
   input {
-    width:100%; background:#0c131e; border:1px solid var(--line); border-radius:12px;
-    color:var(--ink); padding:14px; font-size:16px; font-family:"DM Mono",monospace;
+    width: 100%; background: var(--bg-2); border: 2px solid var(--border);
+    border-radius: var(--r-sm); color: var(--fg); padding: 14px; font-size: 17px;
+    transition: border-color .15s ease, background .15s ease;
   }
-  input:focus { outline:none; border-color:var(--cone); }
-  #code { letter-spacing:3px; text-align:center; }
-  #url { margin-top:4px; }
+  input::placeholder { color: var(--fg-dim); }
+  input:focus { outline: none; border-color: var(--accent); background: var(--bg-card-h); }
+  #code { font-family: 'Consolas', monospace; letter-spacing: 3px; text-align: center; }
+  #url  { font-family: 'Consolas', monospace; margin-top: 4px; }
+
+  /* Pill buttons (matches app .btn) */
   button {
-    width:100%; margin-top:16px; padding:16px; font-family:inherit; font-weight:700;
-    font-size:17px; border:none; border-radius:12px; color:var(--bg); background:var(--cone);
-    cursor:pointer; transition:transform .06s ease, filter .15s ease;
+    font: inherit; cursor: pointer; border: 3px solid transparent;
+    border-radius: 999px; transition: background .15s ease, border-color .15s ease, transform .1s ease, box-shadow .15s ease;
   }
-  button:active { transform:scale(.98); }
-  button:disabled { opacity:.4; }
-  .row { display:flex; gap:10px; align-items:flex-end; }
-  .row .grow { flex:1; min-width:0; }
-  .saved { padding:0 16px; height:50px; margin-top:0; width:auto; font-size:14px;
-           background:var(--bg-2); color:var(--cone); border:1px solid var(--cone); }
-  #status { margin:14px 2px 0; font-size:14px; min-height:20px; font-family:"DM Mono",monospace; }
-  #status.ok  { color:var(--ok); }
-  #status.bad { color:var(--bad); }
-  .hint { color:var(--muted); font-size:13px; line-height:1.55; margin:6px 2px 0; }
-  footer { margin-top:auto; padding-top:18px; text-align:center; color:var(--muted);
-           font-size:12px; font-family:"DM Mono",monospace; }
-  .stripes { height:3px; border-radius:3px; margin-top:12px;
-             background:repeating-linear-gradient(45deg,var(--cone) 0 8px,transparent 8px 16px); opacity:.6; }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .45; }
+  .btn-primary {
+    width: 100%; margin-top: 16px; padding: 16px; font-size: 18px; font-weight: 600;
+    background: var(--accent); color: #102035;
+  }
+  .btn-primary:not(:disabled):active { background: var(--accent-2); box-shadow: 0 0 0 6px var(--accent-soft); }
+  .btn-ghost { background: var(--bg-2); color: var(--fg); border-color: var(--border); }
+
+  .row { display: flex; gap: 10px; align-items: stretch; }
+  .row .grow { flex: 1; min-width: 0; }
+  .savebtn { padding: 0 22px; font-size: 15px; }
+
+  #status { margin: 14px 2px 0; font-size: 14px; min-height: 20px; }
+  #status.ok  { color: var(--accent); }
+  #status.bad { color: var(--danger); }
+  .hint { color: var(--fg-dim); font-size: 13px; line-height: 1.55; margin: 8px 2px 0; }
+  .hint b { color: var(--fg-mute); font-weight: 600; }
+
+  footer { margin-top: auto; padding-top: 18px; text-align: center; color: var(--fg-dim); font-size: 12px; }
 </style>
 </head>
 <body>
   <header>
-    <svg class="cone" viewBox="0 0 64 72" aria-hidden="true">
-      <path d="M32 2 L54 64 H10 Z" fill="#ff8800"/>
-      <path d="M27 20 h10 l2 8 h-14 z M22 40 h20 l3 12 H19 z" fill="#0e1622"/>
-      <rect x="6" y="64" width="52" height="6" rx="3" fill="#d9d9d9"/>
-    </svg>
-    <h1>Send to <span class="tag">VLC&nbsp;TV</span></h1>
+    <img class="cone-img" src="icon.png" alt="VLC TV">
+    <h1>Send to<span>VLC&nbsp;TV</span></h1>
   </header>
 
   <section class="card">
     <label for="code">Pairing code (shown on your TV)</label>
     <div class="row">
       <div class="grow">
-        <input id="code" class="mono" inputmode="text" autocomplete="off" spellcheck="false" placeholder="paste your code">
+        <input id="code" inputmode="text" autocomplete="off" spellcheck="false" placeholder="paste your code">
       </div>
-      <button class="saved" id="savecode" type="button">Save</button>
+      <button class="btn-ghost savebtn" id="savecode" type="button">Save</button>
     </div>
-    <p class="hint">On the TV: <b>Open Network Stream → 📲 Get URL from phone</b>. The code is shown there. You only enter it once.</p>
+    <p class="hint">On the TV: <b>Open Network Stream &rarr; Get URL from phone</b>. The code is shown there. You only enter it once.</p>
   </section>
 
   <section class="card">
     <label for="url">Stream URL</label>
     <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
-           placeholder="https://… · rtsp://… · …/playlist.m3u8">
-    <button id="send" type="button">Send to TV</button>
+           placeholder="https://&hellip; &middot; rtsp://&hellip; &middot; &hellip;/playlist.m3u8">
+    <button class="btn-primary" id="send" type="button">Send to TV</button>
     <p id="status"></p>
-    <p class="hint">After sending, press <b>📲 Get URL from phone</b> on the TV to play it.</p>
+    <p class="hint">After sending, press <b>Get URL from phone</b> on the TV to play it.</p>
   </section>
 
-  <footer>
-    no app, no account — uses ntfy.sh
-    <div class="stripes"></div>
-  </footer>
+  <footer>no app, no account &mdash; uses ntfy.sh</footer>
 
 <script>
 (function () {
@@ -103,7 +123,6 @@
   var NTFY = 'https://ntfy.sh';
   var LS_CODE = 'vlctv_drop_code';
 
-  // Code priority: URL hash (#abc123) > saved > empty.
   var fromHash = (location.hash || '').replace('#', '').trim();
   var saved = '';
   try { saved = localStorage.getItem(LS_CODE) || ''; } catch (e) {}
@@ -111,18 +130,12 @@
   if (initial) $('code').value = initial;
 
   function persist(code) { try { localStorage.setItem(LS_CODE, code); } catch (e) {} }
-
-  function setStatus(text, kind) {
-    var el = $('status');
-    el.textContent = text || '';
-    el.className = kind || '';
-  }
+  function setStatus(text, kind) { var el = $('status'); el.textContent = text || ''; el.className = kind || ''; }
 
   $('savecode').addEventListener('click', function () {
     var c = ($('code').value || '').trim();
     if (!c) { $('code').focus(); return; }
-    persist(c);
-    setStatus('Code saved ✓', 'ok');
+    persist(c); setStatus('Code saved', 'ok');
   });
 
   function send() {
@@ -130,30 +143,18 @@
     var url  = ($('url').value || '').trim();
     if (!code) { setStatus('Enter the pairing code first', 'bad'); $('code').focus(); return; }
     if (!url)  { setStatus('Paste a URL first', 'bad'); $('url').focus(); return; }
-
-    persist(code);
-    setStatus('Sending…', '');
-    $('send').disabled = true;
-
+    persist(code); setStatus('Sending\u2026', ''); $('send').disabled = true;
     fetch(NTFY + '/' + encodeURIComponent('vlctv-' + code), {
-      method: 'POST',
-      body: url,
-      headers: { 'Title': 'VLC TV URL', 'X-Priority': 'default' }
+      method: 'POST', body: url, headers: { 'Title': 'VLC TV URL' }
     })
-    .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      setStatus('Sent ✓  — now press “Get URL from phone” on the TV', 'ok');
-    })
-    .catch(function (e) {
-      setStatus('Failed to send (' + e.message + ')', 'bad');
-    })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status);
+      setStatus('Sent \u2014 now press \u201CGet URL from phone\u201D on the TV', 'ok'); })
+    .catch(function (e) { setStatus('Failed to send (' + e.message + ')', 'bad'); })
     .then(function () { $('send').disabled = false; });
   }
-
   $('send').addEventListener('click', send);
   $('url').addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
 
-  // Optional share-target convenience: ?url=… prefills the field.
   var qUrl = new URLSearchParams(location.search).get('url');
   if (qUrl) $('url').value = qUrl;
 })();
