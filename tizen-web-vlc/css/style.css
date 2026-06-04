@@ -109,7 +109,7 @@ button:focus { outline: none; }
 
 /* ── Home tiles ───────────────────────────────────────────────────── */
 .home-tiles {
-    display: grid; gap: 28px;
+    display: grid; grid-gap: 28px;   /* grid-gap, not gap: TV WebView is Chromium 63 */
     grid-template-columns: repeat(4, 280px);
     justify-content: center;
 }
@@ -680,7 +680,7 @@ button:focus { outline: none; }
 .tvinfo .codecs {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    column-gap: 28px;
+    grid-column-gap: 28px;   /* grid-column-gap for Chromium 63 */
 }
 .tvinfo .codec {
     display: flex;
