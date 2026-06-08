@@ -350,9 +350,9 @@ button:focus { outline: none; }
  * the CC menu.  AVPlay fires onsubtitlechange(duration, text, ...) and we
  * paint into this element.  HTML5 <track> handles its own rendering. */
 /* Size + font come from the user's Settings via CSS custom properties set in
- * SubtitleStyle.apply(); position + background come from the sub-pos-*/sub-bg
- * classes toggled on this element.  Defaults below match the medium/sans/
- * bottom/none preset so the overlay looks right even before apply() runs. */
+ * SubtitleStyle.apply(); position + background come from the sub-pos-XXX and
+ * sub-bg classes toggled on this element.  Defaults below match the medium/
+ * sans/bottom/none preset so the overlay looks right even before apply() runs. */
 #subtitle-overlay {
     position: absolute;
     left: 8%; right: 8%;
