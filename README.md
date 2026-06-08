@@ -33,6 +33,9 @@ with VLC-inspired UI and TV remote-friendly navigation.
 ## Tested on
 
 - Samsung UE55RU7020WXXN (2019, Tizen 5.0)
+- Samsung S90C (2023, Tizen 6.5) — MKV plays via AVPlay; DTS/TrueHD audio
+  tracks can't be decoded by the TV (auto-skipped to a supported track when
+  the file has one)
 - Should run on any Tizen TV from 2017 onward with AVPlay support
 
 ## Installation
