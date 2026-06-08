@@ -166,7 +166,11 @@ var Player = (function () {
     function subEl() { return document.getElementById('subtitle-overlay'); }
     function showSubtitleText(text, durationMs) {
         var el = subEl();
-        if (!el) return;
+        if (!el) {
+            if (typeof Debug !== 'undefined') Debug.warn('showSubtitleText: #subtitle-overlay not found');
+            return;
+        }
+        var raw = text;
         var s = String(text == null ? '' : text)
             .replace(/<br\s*\/?>/gi, '\n')
             .replace(/<[^>]+>/g, '')
@@ -174,6 +178,10 @@ var Player = (function () {
             .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<')
             .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"')
             .trim();
+        if (typeof Debug !== 'undefined')
+            Debug.player('showSubtitleText raw=' + JSON.stringify(String(raw || '').slice(0, 50)) +
+                         ' clean=' + JSON.stringify(s.slice(0, 50)) +
+                         ' overlayClasses=' + el.className);
         if (!s) { hideSubtitleText(); return; }
         // Paint into a .sub-line span (not the overlay directly) so an
         // optional translucent background box hugs the text rather than the
@@ -187,6 +195,10 @@ var Player = (function () {
         }
         line.textContent = s;
         el.classList.remove('hidden');
+        if (typeof Debug !== 'undefined')
+            Debug.player('  painted: overlay now class=' + el.className + ' firstChildTag=' +
+                         (el.firstChild && el.firstChild.tagName) +
+                         ' computedDisplay=' + (window.getComputedStyle ? window.getComputedStyle(el).display : '?'));
         clearTimeout(subClearTimer);
 
         /* AVPlay's `duration` parameter is inconsistent between firmwares
@@ -249,6 +261,7 @@ var Player = (function () {
         extLastCueIdx = -1;
         hideSubtitleText();
     }
+    var extPollDebugCount = 0;
     function extPoll() {
         if (!extCues || !extCues.length) return;
         var t = 0;
@@ -264,8 +277,18 @@ var Player = (function () {
             if (t >= extCues[i].start && t < extCues[i].end) { idx = i; break; }
             if (extCues[i].start > t) break;
         }
+        // Heartbeat every ~5 s so we can confirm the poll is alive even
+        // when the cue isn't changing.
+        extPollDebugCount++;
+        if (typeof Debug !== 'undefined' && (extPollDebugCount % 20) === 1) {
+            Debug.player('extPoll alive t=' + t.toFixed(2) + 's idx=' + idx +
+                         ' last=' + extLastCueIdx + ' cues=' + extCues.length);
+        }
         if (idx === extLastCueIdx) return;
         extLastCueIdx = idx;
+        if (typeof Debug !== 'undefined')
+            Debug.player('extPoll cue change → idx=' + idx +
+                         (idx >= 0 ? ' text=' + JSON.stringify((extCues[idx].text || '').slice(0, 60)) : ''));
         if (idx < 0) hideSubtitleText();
         else         showSubtitleText(extCues[idx].text, 0);   // 0 → no timer
     }
