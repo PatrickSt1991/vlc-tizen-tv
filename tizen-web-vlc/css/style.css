@@ -370,7 +370,10 @@ button:focus { outline: none; }
          2px -2px 0 rgba(0,0,0,.85),
         -2px -2px 0 rgba(0,0,0,.85);
     pointer-events: none;
-    z-index: 50;            /* above the video plane, below OSDs */
+    /* Bumped from 50 to 80 — the OSDs have no explicit z-index (auto/0)
+     * but on Tizen Chromium 63 they appear to obscure the overlay anyway.
+     * 80 keeps it below the pickers (200) and toast (1000). */
+    z-index: 80;
 }
 /* Position presets.  Bottom is the default; middle/top free the opposite
  * anchor so the block grows in the right direction. */
@@ -381,7 +384,10 @@ button:focus { outline: none; }
 /* The cue text lives in a .sub-line span so a translucent box (when enabled)
  * hugs the text instead of spanning the full 8%-to-8% width. */
 #subtitle-overlay .sub-line {
-    display: inline;
+    /* inline-block is more reliable than inline on Tizen Chromium 63 for
+     * absolutely-positioned text-align:center containers — pure inline
+     * spans sometimes rendered invisibly there. */
+    display: inline-block;
     white-space: pre-line;
     -webkit-box-decoration-break: clone;
     box-decoration-break: clone;

@@ -195,10 +195,22 @@ var Player = (function () {
         }
         line.textContent = s;
         el.classList.remove('hidden');
-        if (typeof Debug !== 'undefined')
-            Debug.player('  painted: overlay now class=' + el.className + ' firstChildTag=' +
-                         (el.firstChild && el.firstChild.tagName) +
-                         ' computedDisplay=' + (window.getComputedStyle ? window.getComputedStyle(el).display : '?'));
+        if (typeof Debug !== 'undefined' && window.getComputedStyle) {
+            var elCs   = window.getComputedStyle(el);
+            var lineCs = window.getComputedStyle(line);
+            var elRect = el.getBoundingClientRect();
+            var lnRect = line.getBoundingClientRect();
+            Debug.player('  painted: overlay disp=' + elCs.display +
+                         ' visi=' + elCs.visibility + ' op=' + elCs.opacity +
+                         ' z=' + elCs.zIndex + ' rect=' + Math.round(elRect.left) +
+                         ',' + Math.round(elRect.top) + ' ' + Math.round(elRect.width) +
+                         'x' + Math.round(elRect.height));
+            Debug.player('  painted: line disp=' + lineCs.display +
+                         ' visi=' + lineCs.visibility + ' op=' + lineCs.opacity +
+                         ' color=' + lineCs.color + ' fs=' + lineCs.fontSize +
+                         ' rect=' + Math.round(lnRect.left) + ',' + Math.round(lnRect.top) +
+                         ' ' + Math.round(lnRect.width) + 'x' + Math.round(lnRect.height));
+        }
         clearTimeout(subClearTimer);
 
         /* AVPlay's `duration` parameter is inconsistent between firmwares
