@@ -584,17 +584,26 @@
         // Hint for opaque codec-not-supported errors
         var hint = '';
         var uri = state.playingUri || '';
-        var isMkv = /\.mkv($|\?)/i.test(uri) || /MKV not supported/i.test(msg);
+        // AVPlay-failed-on-MKV is signalled with the "MKV_CODEC:" prefix from
+        // player.js.  The old "MKV not supported" HTML5 message is kept in the
+        // match for safety, but AVPlay DOES support the MKV container on these
+        // TVs — a failure is a codec inside it, most often DTS/TrueHD audio.
+        var isMkv = /^MKV_CODEC:/.test(msg) || /\.mkv($|\?)/i.test(uri) || /MKV not supported/i.test(msg);
 
         if (isMkv) {
-            // Replace the raw error with a clear headline; the hint carries
-            // the actionable detail.
-            msg = 'MKV files aren\'t supported on this TV';
-            hint = 'The TV\'s WebView can\'t decode MKV containers directly. ' +
-                   'Remux to MP4 — no quality loss, takes seconds:\n\n' +
-                   '    ffmpeg -i input.mkv -c copy output.mp4\n\n' +
-                   'If the audio codec is FLAC or DTS, also re-encode audio:\n\n' +
-                   '    ffmpeg -i input.mkv -c:v copy -c:a aac -b:a 192k output.mp4';
+            msg = 'This MKV couldn’t be played';
+            hint = 'The MKV container itself is fine on this TV — the problem is a ' +
+                   'track inside it.  Most often that’s DTS or TrueHD audio, which ' +
+                   'Samsung TVs can’t decode (they only pass those through to an AV ' +
+                   'receiver over HDMI).  Less often it’s AV1 or 10-bit HEVC video.\n\n' +
+                   'Try, in order:\n' +
+                   '  1. Open the CC / track menu and pick another audio track (many ' +
+                   'releases include an AC3 or AAC track alongside the DTS one).\n' +
+                   '  2. Re-encode just the audio (keeps the video untouched, fast even ' +
+                   'on a Raspberry Pi):\n' +
+                   '       ffmpeg -i input.mkv -c:v copy -c:a ac3 -b:a 640k output.mkv\n' +
+                   '  3. If the video also won’t play, remux/transcode the whole file:\n' +
+                   '       ffmpeg -i input.mkv -c:v copy -c:a aac -b:a 192k output.mp4';
         } else if (/unknown error|not supported|invalid|stuck loading|unsupported source/i.test(msg)) {
             hint = 'The file or stream may use a codec or container that this TV can\'t ' +
                    'decode (HEVC 10-bit, AV1, DTS-HD MA, VP9 Profile 2, etc.). ' +
@@ -694,7 +703,9 @@
             codecHtml += '<div class="codec"><span class="name">USB local files</span>' +
                          '<span class="status ok">✓ Via HTML5 video</span></div>';
             codecHtml += '<div class="codec"><span class="name">MKV container</span>' +
-                         '<span class="status maybe">? Remux to MP4</span></div>';
+                         '<span class="status ok">✓ Via AVPlay</span></div>';
+            codecHtml += '<div class="codec"><span class="name">DTS / TrueHD audio</span>' +
+                         '<span class="status no">✗ TV can’t decode</span></div>';
             codecHtml += '</div>';
 
             box.innerHTML = rows.join('') + codecHtml;
@@ -953,35 +964,81 @@
      * HTML5 external subs, lang tag) matches the preferred ISO code and
      * activates it.  Subtitle 'off' explicitly disables.  No-op if the
      * preference is empty (Auto). */
+    /* Pick the audio track to play, balancing two goals:
+     *   1. the user's preferred audio language (Settings → audioLang), and
+     *   2. actually getting sound — Samsung TVs can't decode DTS/TrueHD, so a
+     *      track flagged `unsupported` by Player.getTracks() plays silently.
+     * Priority: preferred-language + decodable  >  any decodable  >  the
+     * preferred-language track even if silent (at least it's the right
+     * language).  Only switches when it improves on the current/default track,
+     * and surfaces a toast so the user understands a silent file. */
+    function chooseAudioTrack(tracks) {
+        var audio = (tracks && tracks.audio) || [];
+        if (!audio.length) return;
+
+        var pref = (Settings.get('audioLang') || '').toLowerCase();
+        function langMatches(t) {
+            if (!pref) return false;
+            var l = (t.lang || '').toLowerCase();
+            var nm = (t.name || '').toLowerCase();
+            return l === pref ||
+                   (l && pref.length === 2 && l.indexOf(pref) === 0) ||
+                   (l && l.length === 2 && pref.indexOf(l) === 0) ||
+                   nm.indexOf(pref) >= 0;
+        }
+        function firstSupported(list) {
+            for (var i = 0; i < list.length; i++) if (!list[i].unsupported) return list[i];
+            return null;
+        }
+
+        var active = null;
+        for (var i = 0; i < audio.length; i++) if (audio[i].active) { active = audio[i]; break; }
+
+        var target = null;
+        if (pref) {
+            var matchSupported = null, matchAny = null;
+            for (var j = 0; j < audio.length; j++) {
+                if (!langMatches(audio[j])) continue;
+                if (!matchAny) matchAny = audio[j];
+                if (!audio[j].unsupported && !matchSupported) matchSupported = audio[j];
+            }
+            if (matchSupported)      target = matchSupported;          // ideal
+            else if (matchAny)       target = firstSupported(audio) || matchAny;
+        }
+        // No preference (or none usable): only step in if the current track is
+        // undecodable but a decodable one exists.
+        if (!target && active && active.unsupported) target = firstSupported(audio);
+
+        if (target && (!active || target.index !== active.index)) {
+            Player.setAudioTrack(target.index);
+            if (active && active.unsupported && !target.unsupported)
+                UI.toast('Switched to ' + (target.codec || 'a decodable') +
+                         ' audio — TV can’t decode ' + (active.codec || 'the default track'));
+            if (typeof Debug !== 'undefined')
+                Debug.player('chooseAudioTrack → ' + target.name +
+                             ' (active was ' + (active ? active.name : 'none') + ')');
+        }
+
+        // If we still can't get a decodable track, tell the user why it's silent.
+        var finalT = target || active;
+        if (finalT && finalT.unsupported && !firstSupported(audio)) {
+            UI.toast('No audio track this TV can decode (' +
+                     (finalT.codec || 'DTS/TrueHD') + ') — playing without sound');
+        }
+    }
+
     var prefsAppliedFor = null;
     function applyLanguagePreferences() {
         // Only apply once per file to avoid clobbering manual selections
         if (prefsAppliedFor === state.playingUri) return;
         prefsAppliedFor = state.playingUri;
 
-        var prefAudio = Settings.get('audioLang');
         var prefSub   = Settings.get('subtitleLang');
         var tracks    = Player.getTracks();
 
-        // Audio: only act if user has a non-empty preference
-        if (prefAudio) {
-            var want = prefAudio.toLowerCase();
-            for (var i = 0; i < tracks.audio.length; i++) {
-                var t = tracks.audio[i];
-                var lang = (t.lang || '').toLowerCase();
-                var nm   = (t.name || '').toLowerCase();
-                // Match on explicit lang field first (ISO 2 or 3 letter),
-                // then fall back to substring match on the display name.
-                if (lang === want ||
-                    (lang && want.length === 2 && lang.indexOf(want) === 0) ||
-                    (lang && lang.length === 2 && want.indexOf(lang) === 0) ||
-                    nm.indexOf(want) >= 0) {
-                    Player.setAudioTrack(t.index);
-                    if (typeof Debug !== 'undefined') Debug.player('applied audio pref ' + prefAudio + ' → ' + t.name);
-                    break;
-                }
-            }
-        }
+        // Audio: honour the language preference, but never leave the user on a
+        // track the TV can't decode (DTS/TrueHD) when a playable one exists.
+        chooseAudioTrack(tracks);
 
         // Subtitle: 'off' explicit, '' auto (no action), code → match
         if (prefSub === 'off') {

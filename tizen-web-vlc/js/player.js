@@ -766,6 +766,21 @@ var Player = (function () {
                 extractAndAppendEmbeddedSubs(url);
 
                 avOpen(url, function (reason) {
+                    // For MKV there's no point falling back to the HTML5
+                    // <video> element — Tizen's chromium can't demux Matroska,
+                    // so it would only produce the misleading "MKV not
+                    // supported" message.  AVPlay DOES support the MKV
+                    // container on these TVs, so a failure here is almost
+                    // always a codec inside it (most often DTS/TrueHD audio,
+                    // sometimes AV1 / HEVC-10bit video).  Surface that instead.
+                    if (isMkvUrl(url)) {
+                        if (typeof Debug !== 'undefined')
+                            Debug.player('AV MKV failed, no HTML5 fallback: ' + reason);
+                        try { if (av()) av().close(); } catch (e) {}
+                        avStopPolling();
+                        emit('onerror', 'MKV_CODEC: ' + reason);
+                        return;
+                    }
                     if (typeof Debug !== 'undefined')
                         Debug.player('AV local-file fallback → HTML5: ' + reason);
                     try { if (av()) av().close(); } catch (e) {}
@@ -869,12 +884,28 @@ var Player = (function () {
         if (backend === BACKEND_AVPLAY) avSetDisplayRect();
     }
 
+    /* Audio codecs Samsung TVs can't decode in-app, no matter the firmware:
+     *   - DTS / DTS-HD / DTS:X  — Samsung dropped DTS licensing years ago.
+     *   - TrueHD / MLP (Dolby)  — only ever handled via HDMI/eARC bitstream
+     *                             passthrough to an AVR, never decoded in-app.
+     * AVPlay reports these in extra_info.fourCC as DTS / DTSHD / TRUEHD / MLP
+     * (spelling varies by firmware), so match loosely.  When the only/active
+     * audio track uses one of these, the file plays silently (or AVPlay errors
+     * out entirely) — the fix is to switch to another track or transcode the
+     * audio, never to "fix the container". */
+    function isUndecodableAudioCodec(codec) {
+        // Leading word boundary only — catches the firmware spelling variants
+        // (DTS, DTS-HD, DTSHD, DTS:X, DCA, TRUEHD, TrueHD, MLP) without a
+        // trailing \b dropping the no-separator forms like "DTSHD".
+        return /\b(dts|dca|truehd|mlp)/i.test(String(codec || ''));
+    }
+
     /* AVPlay's extra_info field is a JSON string with fields like
      *   { "language":"eng", "channels":2, "fourCC":"AAC", ... }
      * for audio, and similar for subtitles.  Older firmwares hand back
-     * a plain string instead.  Return a {label, lang} pair either way. */
+     * a plain string instead.  Return {label, lang, codec} either way. */
     function parseAvExtraInfo(raw) {
-        if (!raw) return { label: '', lang: '' };
+        if (!raw) return { label: '', lang: '', codec: '' };
         var s = String(raw).trim();
         var obj = null;
         if (s.charAt(0) === '{') {
@@ -883,14 +914,15 @@ var Player = (function () {
         if (!obj) {
             // Not JSON — use as-is, and look for a 3-letter ISO code in it
             var m = s.match(/\b([a-z]{2,3})\b/i);
-            return { label: s, lang: m ? m[1].toLowerCase() : '' };
+            return { label: s, lang: m ? m[1].toLowerCase() : '', codec: s };
         }
-        var lang = (obj.language || obj.lang || '').toString().toLowerCase();
+        var lang  = (obj.language || obj.lang || '').toString().toLowerCase();
+        var codec = (obj.fourCC || obj.codec || '').toString();
         var parts = [];
         if (lang) parts.push(lang.toUpperCase());
-        if (obj.fourCC)   parts.push(obj.fourCC);
+        if (codec) parts.push(codec);
         if (obj.channels) parts.push(obj.channels + 'ch');
-        return { label: parts.join(' · ') || s, lang: lang };
+        return { label: parts.join(' · ') || s, lang: lang, codec: codec };
     }
 
     /* ── Track info ─────────────────────────────────────────────────────
@@ -939,10 +971,16 @@ var Player = (function () {
                     var parsed = parseAvExtraInfo(t.extra_info);
                     if (t.type === 'VIDEO') continue;
                     if (t.type === 'AUDIO') {
+                        var unsupported = isUndecodableAudioCodec(parsed.codec);
                         out.audio.push({
                             index:  t.index,
-                            name:   parsed.label || ('Audio ' + t.index),
+                            // Flag codecs the TV can't decode right in the
+                            // label so the user knows why a track is silent.
+                            name:   (parsed.label || ('Audio ' + t.index)) +
+                                    (unsupported ? ' — not supported by TV' : ''),
                             lang:   parsed.lang || '',
+                            codec:  parsed.codec || '',
+                            unsupported: unsupported,
                             type:   'AVPLAY',
                             active: (t.index === activeAudioIdx)
                         });
