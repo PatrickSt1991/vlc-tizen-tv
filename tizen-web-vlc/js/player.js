@@ -163,6 +163,13 @@ var Player = (function () {
     var extCues = null;            // parsed external cues [{start, end, text}]
     var extPollTimer = null;
     var extLastCueIdx = -1;
+    /* Gate for AVPlay's native onsubtitlechange callback.  Default false so
+     * the firmware's stray "first cue of the default-selected embedded TEXT
+     * track" fire at file-open doesn't flash on screen when the user has
+     * subs off or has picked an external sub.  Flipped to true only when
+     * the user explicitly selects an embed:N entry from the CC menu, and
+     * back to false on "off" / external / new file. */
+    var avNativeSubsAllowed = false;
     function subEl() { return document.getElementById('subtitle-overlay'); }
     function showSubtitleText(text, durationMs) {
         var el = subEl();
@@ -486,13 +493,17 @@ var Player = (function () {
         var subListener = function (duration, text, type, attr) {
             if (typeof Debug !== 'undefined')
                 Debug.player('SUB cb dur=' + duration + ' type=' + type +
-                             ' text=' + JSON.stringify(text || '').slice(0, 80));
-            /* This is the Samsung-recommended pattern (see their sample
-             * SampleWebApps-PlayerAvplayWithSubtitles).  When AVPlay loads
-             * subtitles via setExternalSubtitlePath() OR via embedded TEXT
-             * tracks, it fires this callback with each cue's text.  We just
-             * paint it.  AVPlay does NOT render subtitles natively on its
-             * video plane on this firmware — the app has to. */
+                             ' text=' + JSON.stringify(text || '').slice(0, 80) +
+                             ' allowed=' + avNativeSubsAllowed);
+            /* AVPlay fires this callback for embedded TEXT tracks selected
+             * via setSelectTrack.  It ALSO fires one stray cue at file open
+             * for whatever embedded TEXT track is the default-selected one,
+             * even after setSilentSubtitle(true) — Tizen 5.0 firmware bug.
+             * Only paint when the user has actually picked an embedded sub
+             * via the CC menu; otherwise this would briefly flash the file's
+             * default embedded language even when the user wants subs off
+             * or has picked an external sub. */
+            if (!avNativeSubsAllowed) return;
             showSubtitleText(text, duration);
         };
 
@@ -774,6 +785,7 @@ var Player = (function () {
         playerSubtitles = (opts.subtitles) ? opts.subtitles.slice() : [];
         h5Subtitles = playerSubtitles;
         stopExternalSubtitle();    // clear any previous file's poller
+        avNativeSubsAllowed = false;   // don't paint AVPlay's stray first-cue at file open
         backend = pickBackend(url);
         var streamType = sniffStreamType(url);
         if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ', backend=' + backend + ', subs=' + playerSubtitles.length + ')');
@@ -852,6 +864,7 @@ var Player = (function () {
         stopExternalSubtitle();
         hideSubtitleText();
         currentExternalSub = null;
+        avNativeSubsAllowed = false;
         // Always fully tear down BOTH backends — some firmwares leave the
         // hidden one alive (auto-replaying audio on view switch).
         var v = h5el();
@@ -1216,6 +1229,7 @@ var Player = (function () {
             // "Off"
             if (index === -1 || index === undefined || index === 'off') {
                 try { av().setSilentSubtitle(true); } catch (e) {}
+                avNativeSubsAllowed = false;
                 currentExternalSub = null;   // allow re-selecting the same sub later
                 return;
             }
@@ -1228,6 +1242,7 @@ var Player = (function () {
                 var k = parseInt(index.slice(4), 10);
                 var sub = playerSubtitles[k];
                 if (!sub) return;
+                avNativeSubsAllowed = false;
                 applyExternalSubtitleLive(sub);
                 if (typeof Debug !== 'undefined')
                     Debug.player('external sub via JS poller (no-seek): ' + sub.name);
@@ -1235,6 +1250,7 @@ var Player = (function () {
             }
 
             // Embedded subtitle: "embed:<i>" — delegate to AVPlay's own track API
+            avNativeSubsAllowed = true;
             var embedIdx = (typeof index === 'string' && index.indexOf('embed:') === 0)
                 ? parseInt(index.slice(6), 10)
                 : index;
