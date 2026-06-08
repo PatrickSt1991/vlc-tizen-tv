@@ -71,21 +71,25 @@
         <input id="url-input" type="text" inputmode="url"
                placeholder="rtsp://… · https://…/playlist.m3u8 · file:///opt/usr/media/…"
                data-focus>
-        <div class="presets">
-            <button class="preset" data-url="http://vjs.zencdn.net/v/oceans.mp4">Oceans (MP4, short)</button>
-            <button class="preset" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">HLS test (Mux)</button>
-            <button class="preset" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny (MP4)</button>
-            <button class="preset" data-url="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8">Apple BipBop (HLS, 16:9)</button>
-            <button class="preset" data-url="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH test (Akamai)</button>
-            <button class="preset" data-url="rtsp://9627b0bf2a7b.entrypoint.cloud.wowza.com:1935/app-p5260J38/66abe4b9_stream1">My Wowza RTSP</button>
-            <button class="preset" data-url="rtsp://170.93.143.139:554/rtplive/470011e600ef003a004ee33696235daa">FAA RTSP (public)</button>
-        </div>
     </div>
 
     <div class="actions">
         <button class="btn primary" data-action="open-current-url">Play</button>
         <button class="btn ghost"   data-action="fetch-remote-url">📲 Get URL from device</button>
         <button class="btn ghost"   data-action="back-home">Cancel</button>
+    </div>
+
+    <!-- Sample inputs sit below the primary actions so the remote lands on
+         Play first; the chips are a secondary, try-it convenience. -->
+    <div class="presets">
+        <div class="presets-label">Or try a sample stream</div>
+        <button class="preset" data-url="http://vjs.zencdn.net/v/oceans.mp4">Oceans (MP4, short)</button>
+        <button class="preset" data-url="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">HLS test (Mux)</button>
+        <button class="preset" data-url="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">Big Buck Bunny (MP4)</button>
+        <button class="preset" data-url="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8">Apple BipBop (HLS, 16:9)</button>
+        <button class="preset" data-url="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd">DASH test (Akamai)</button>
+        <button class="preset" data-url="rtsp://9627b0bf2a7b.entrypoint.cloud.wowza.com:1935/app-p5260J38/66abe4b9_stream1">My Wowza RTSP</button>
+        <button class="preset" data-url="rtsp://170.93.143.139:554/rtplive/470011e600ef003a004ee33696235daa">FAA RTSP (public)</button>
     </div>
 
     <p class="url-drop-hint">Paste a URL from your phone, tablet or laptop — pair once under <b>Settings</b>.</p>
@@ -196,6 +200,26 @@
             <button class="settings-row" data-action="setting-auto-play">
                 <div class="settings-label">Auto-play next file</div>
                 <div class="settings-value" id="setting-auto-play-value">Off</div>
+            </button>
+        </div>
+
+        <h2 class="settings-section-title">Subtitle appearance</h2>
+        <div class="settings-group">
+            <button class="settings-row" data-action="setting-subtitle-size">
+                <div class="settings-label">Subtitle size</div>
+                <div class="settings-value" id="setting-subtitle-size-value">Medium</div>
+            </button>
+            <button class="settings-row" data-action="setting-subtitle-font">
+                <div class="settings-label">Subtitle font</div>
+                <div class="settings-value" id="setting-subtitle-font-value">Sans-serif</div>
+            </button>
+            <button class="settings-row" data-action="setting-subtitle-position">
+                <div class="settings-label">Subtitle position</div>
+                <div class="settings-value" id="setting-subtitle-position-value">Bottom</div>
+            </button>
+            <button class="settings-row" data-action="setting-subtitle-bg">
+                <div class="settings-label">Subtitle background</div>
+                <div class="settings-value" id="setting-subtitle-bg-value">None</div>
             </button>
         </div>
 

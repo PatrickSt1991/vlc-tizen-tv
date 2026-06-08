@@ -7,24 +7,30 @@
 var Settings = (function () {
     var KEY = 'vlctv_settings_v1';
     var defaults = {
-        audioLang:        '',      // '' = auto (use file's default), or ISO code
-        subtitleLang:     'off',   // 'off' = no subs, '' = auto-pick first, or ISO code
-        repeatMode:       'off',   // 'off' | 'one'
-        autoPlay:         false    // auto-play the next file in the folder when one finishes
+        audioLang:        '',          // '' = auto (use file's default), or ISO code
+        subtitleLang:     'off',       // 'off' = no subs, '' = auto-pick first, or ISO code
+        repeatMode:       'off',       // 'off' | 'one'
+        autoPlay:         false,       // auto-play the next file in the folder when one finishes
+        // ── Subtitle appearance (applied to the painted overlay) ──────────
+        subtitleSize:     'medium',    // 'small' | 'medium' | 'large' | 'xlarge'
+        subtitleFont:     'sans',      // 'sans' | 'serif' | 'mono'
+        subtitlePosition: 'bottom',    // 'bottom' | 'middle' | 'top'
+        subtitleBg:       'none'       // 'none' | 'box'  (translucent box behind text)
     };
     var cache = null;
 
     function load() {
         if (cache) return cache;
+        var stored = {};
         try {
             var raw = localStorage.getItem(KEY);
-            var stored = raw ? JSON.parse(raw) : {};
-            cache = {};
-            for (var k in defaults)
-                cache[k] = (k in stored) ? stored[k] : defaults[k];
-        } catch (e) {
-            cache = { audioLang: '', subtitleLang: 'off', repeatMode: 'off', autoPlay: false };
-        }
+            stored = raw ? JSON.parse(raw) : {};
+        } catch (e) { stored = {}; }
+        // Build from defaults so newly-added keys always have a value, even
+        // when the stored blob predates them.
+        cache = {};
+        for (var k in defaults)
+            cache[k] = (stored && k in stored) ? stored[k] : defaults[k];
         return cache;
     }
     function save() {
@@ -141,5 +147,89 @@ var LanguageList = (function () {
                 if (langs[i].code === code) return langs[i].name;
             return code || 'Auto';
         }
+    };
+})();
+
+
+/* Subtitle-appearance options + their resolved CSS values.  Subtitles are
+ * painted by the app into #subtitle-overlay (AVPlay backend, both embedded
+ * and external cues) and by the browser into video::cue (HTML5 fallback),
+ * so apply() drives both surfaces from the saved Settings. */
+var SubtitleStyle = (function () {
+    var SIZE = [
+        { code: 'small',  name: 'Small',       px: 26 },
+        { code: 'medium', name: 'Medium',      px: 36 },
+        { code: 'large',  name: 'Large',       px: 48 },
+        { code: 'xlarge', name: 'Extra large', px: 60 }
+    ];
+    var FONT = [
+        { code: 'sans',  name: 'Sans-serif', css: "'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif" },
+        { code: 'serif', name: 'Serif',      css: "Georgia,'Times New Roman',serif" },
+        { code: 'mono',  name: 'Monospace',  css: "'Consolas','Courier New',monospace" }
+    ];
+    var POSITION = [
+        { code: 'bottom', name: 'Bottom' },
+        { code: 'middle', name: 'Middle' },
+        { code: 'top',    name: 'Top' }
+    ];
+    var BG = [
+        { code: 'none', name: 'None (outline only)' },
+        { code: 'box',  name: 'Translucent box' }
+    ];
+
+    function find(list, code) {
+        for (var i = 0; i < list.length; i++) if (list[i].code === code) return list[i];
+        return list[0];
+    }
+    function nameFor(group, code) { return find(group, code).name; }
+
+    /* Read the four subtitle settings and push them onto the document: CSS
+     * custom properties (consumed by #subtitle-overlay) + a generated
+     * video::cue rule for the HTML5 backend.  Position is overlay-only —
+     * ::cue position is driven by the cue's own line setting, not CSS. */
+    function apply() {
+        if (typeof Settings === 'undefined') return;
+        var size = find(SIZE, Settings.get('subtitleSize'));
+        var font = find(FONT, Settings.get('subtitleFont'));
+        var pos  = find(POSITION, Settings.get('subtitlePosition'));
+        var bg   = Settings.get('subtitleBg');
+
+        var root = document.documentElement;
+        root.style.setProperty('--sub-size', size.px + 'px');
+        root.style.setProperty('--sub-font', font.css);
+
+        var ov = document.getElementById('subtitle-overlay');
+        if (ov) {
+            ov.classList.remove('sub-pos-bottom', 'sub-pos-middle', 'sub-pos-top');
+            ov.classList.add('sub-pos-' + pos.code);
+            ov.classList.toggle('sub-bg', bg === 'box');
+        }
+
+        // HTML5 <track> rendering: inject/update a ::cue rule.
+        var styleEl = document.getElementById('subtitle-cue-style');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'subtitle-cue-style';
+            document.head.appendChild(styleEl);
+        }
+        styleEl.textContent =
+            'video::cue{' +
+            'font-size:' + size.px + 'px;' +
+            'font-family:' + font.css + ';' +
+            (bg === 'box' ? 'background:rgba(0,0,0,.65);'
+                          : 'background:transparent;') +
+            '}';
+    }
+
+    return {
+        forSize:     function () { return SIZE; },
+        forFont:     function () { return FONT; },
+        forPosition: function () { return POSITION; },
+        forBg:       function () { return BG; },
+        nameForSize: function (c) { return nameFor(SIZE, c); },
+        nameForFont: function (c) { return nameFor(FONT, c); },
+        nameForPosition: function (c) { return nameFor(POSITION, c); },
+        nameForBg:   function (c) { return nameFor(BG, c); },
+        apply:       apply
     };
 })();

@@ -167,7 +167,8 @@
         window.addEventListener('resize', Player.setDisplayRect);
 
         UI.showView('view-home');
-        updateRepeatButton();  // reflect saved repeat preference on OSD
+        updateRepeatButton();        // reflect saved repeat preference on OSD
+        SubtitleStyle.apply();       // push saved subtitle appearance onto the overlay
     }
 
     /* ── Action dispatcher ────────────────────────────────────────── */
@@ -201,6 +202,10 @@
             case 'setting-subtitle-lang': openLangPicker('subtitleLang', 'Preferred subtitle language', LanguageList.forSubtitle()); break;
             case 'setting-repeat-mode':   openRepeatPicker(); break;
             case 'setting-auto-play':     openAutoPlayPicker(); break;
+            case 'setting-subtitle-size':     openSubtitlePicker('subtitleSize',     'Subtitle size',       SubtitleStyle.forSize());     break;
+            case 'setting-subtitle-font':     openSubtitlePicker('subtitleFont',     'Subtitle font',       SubtitleStyle.forFont());     break;
+            case 'setting-subtitle-position': openSubtitlePicker('subtitlePosition', 'Subtitle position',   SubtitleStyle.forPosition()); break;
+            case 'setting-subtitle-bg':       openSubtitlePicker('subtitleBg',       'Subtitle background', SubtitleStyle.forBg());       break;
             case 'close-picker':       closePicker(); break;
         }
     }
@@ -645,6 +650,10 @@
         document.getElementById('setting-subtitle-lang-value').textContent = LanguageList.nameFor(Settings.get('subtitleLang'));
         document.getElementById('setting-repeat-mode-value').textContent   = (Settings.get('repeatMode') === 'one') ? 'Repeat one' : 'Off';
         document.getElementById('setting-auto-play-value').textContent     = Settings.get('autoPlay') ? 'On' : 'Off';
+        document.getElementById('setting-subtitle-size-value').textContent     = SubtitleStyle.nameForSize(Settings.get('subtitleSize'));
+        document.getElementById('setting-subtitle-font-value').textContent     = SubtitleStyle.nameForFont(Settings.get('subtitleFont'));
+        document.getElementById('setting-subtitle-position-value').textContent = SubtitleStyle.nameForPosition(Settings.get('subtitlePosition'));
+        document.getElementById('setting-subtitle-bg-value').textContent       = SubtitleStyle.nameForBg(Settings.get('subtitleBg'));
         // Mirror repeat state to the OSD button if visible
         updateRepeatButton();
     }
@@ -739,6 +748,18 @@
             Settings.set('repeatMode', val);
             refreshSettingsValues();
             UI.toast('Repeat: ' + (val === 'one' ? 'On' : 'Off'));
+        });
+    }
+    /* Subtitle-appearance pickers — share the generic option list, then
+     * re-apply the live style so changes show immediately on the overlay. */
+    function openSubtitlePicker(settingKey, title, options) {
+        pickerSetting = settingKey;
+        var cur = Settings.get(settingKey);
+        openPicker(title, options, cur, function (val) {
+            Settings.set(settingKey, val);
+            SubtitleStyle.apply();
+            refreshSettingsValues();
+            UI.toast(title + ' updated');
         });
     }
     function openAutoPlayPicker() {

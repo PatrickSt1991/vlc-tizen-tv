@@ -94,47 +94,16 @@ var Player = (function () {
         }
     }
 
-    /* Tell AVPlay to load an external subtitle file by path.  Samsung's
-     * own sample (SampleWebApps-PlayerAvplayWithSubtitles) uses this API:
-     * strip 'file://' from the URI, hand AVPlay the raw path,
-     * setSilentSubtitle(false) to make it deliver cues via the
-     * onsubtitlechange callback.
-     *
-     * BUG: on Tizen 5.0 this call triggers a silent seek to ~midway in the
-     * file when invoked AFTER play() has started.  So we only use it BEFORE
-     * play() (avOpen's prepare callback, READY state — no seek).  Every
-     * mid-playback switch goes through applyExternalSubtitleLive() instead,
-     * which renders with the JS time-poller and never moves the playhead. */
+    /* All external subtitles (SRT / VTT / ASS / SSA / SMI) are painted by the
+     * JS time-poller into #subtitle-overlay, never through AVPlay's native
+     * setExternalSubtitlePath.  The native path can't render ASS on this
+     * firmware and carried a mid-file seek bug; the poller handles every
+     * format, never moves the playhead, and lets the user's appearance
+     * settings apply.  currentExternalSub tracks which file is active so the
+     * CC menu can mark it and "Off" can clear it. */
     var currentExternalSub = null;
-    /* Pre-play ONLY: apply an external subtitle through AVPlay's native
-     * setExternalSubtitlePath while AVPlay is still in the READY state (i.e.
-     * from inside the prepareAsync callback, before play()).  In that state
-     * the call is safe.  Invoked mid-playback it triggers a silent seek to
-     * mid-file on Tizen 5.0 — for that case use applyExternalSubtitleLive()
-     * instead, which never moves the playhead.  Returns true on success. */
-    function setAvExternalSubtitle(sub) {
-        if (!sub) return false;
-        if (currentExternalSub === sub) return true;      // already loaded
-        var path = sub.fullPath || sub.uri || '';
-        if (path.indexOf('file://') === 0) {
-            path = path.slice(7);
-            try { path = decodeURIComponent(path); } catch (e) {}
-        }
-        if (!path) return false;
 
-        if (typeof Debug !== 'undefined') Debug.player('setExternalSubtitlePath (pre-play) ' + path);
-        try {
-            av().setExternalSubtitlePath(path);
-        } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.error('setExternalSubtitlePath: ' + (e.message || e));
-            return false;
-        }
-        try { av().setSilentSubtitle(false); } catch (e) {}
-        currentExternalSub = sub;
-        return true;
-    }
-
-    /* Mid-playback external-subtitle switch that does NOT touch playback
+    /* External-subtitle switch that does NOT touch playback
      * state — this is the fix for the sub-switch flicker (issue #4).
      *
      * AVPlay's setExternalSubtitlePath() seeks to mid-file when called during
@@ -206,7 +175,17 @@ var Player = (function () {
             .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"')
             .trim();
         if (!s) { hideSubtitleText(); return; }
-        el.textContent = s;
+        // Paint into a .sub-line span (not the overlay directly) so an
+        // optional translucent background box hugs the text rather than the
+        // full overlay width.  textContent keeps it injection-safe.
+        var line = el.firstChild;
+        if (!line || line.className !== 'sub-line') {
+            el.textContent = '';
+            line = document.createElement('span');
+            line.className = 'sub-line';
+            el.appendChild(line);
+        }
+        line.textContent = s;
         el.classList.remove('hidden');
         clearTimeout(subClearTimer);
 
@@ -253,7 +232,7 @@ var Player = (function () {
                 case 'vtt':                 extCues = parseVttCues(text); break;
                 case 'srt':                 extCues = parseSrtCues(text); break;
                 case 'ass':
-                case 'ssa':                 extCues = parseVttCues(assToVtt(text)); break;
+                case 'ssa':                 extCues = parseAssCues(text); break;
                 case 'smi':
                 case 'sami':                extCues = parseVttCues(smiToVtt(text)); break;
                 default:                    extCues = parseSrtCues(text); break;
@@ -291,28 +270,118 @@ var Player = (function () {
         else         showSubtitleText(extCues[idx].text, 0);   // 0 → no timer
     }
 
+    /* SRT/VTT timecode line, e.g. "00:01:02,500 --> 00:01:05,000" (both ,
+     * and . decimals accepted).  VTT also allows a 2-field "MM:SS.mmm" form
+     * with no hours, so the hours group is optional. */
+    var TIMECODE_RE =
+        /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})/;
+
+    function tcToSecs(h, m, s, frac) {
+        // frac is the raw decimal digits — normalise to milliseconds.
+        var f = String(frac || '0');
+        while (f.length < 3) f += '0';
+        f = f.slice(0, 3);
+        return (+h || 0) * 3600 + (+m || 0) * 60 + (+s || 0) + (+f) / 1000;
+    }
+
     function parseSrtCues(srt) {
         var out = [];
-        var blocks = String(srt || '').replace(/\r/g, '').split(/\n\n+/);
+        // Strip a leading UTF-8 BOM and CRs, then split into blank-line-
+        // separated blocks.  We scan each block for the timecode line rather
+        // than assuming it's the first/second line, so an optional numeric
+        // index, a VTT cue identifier, a stray leading blank line, or a NOTE
+        // block don't throw the parse off (the old code dropped the first
+        // cue whenever a blank line led the block).
+        var clean = String(srt || '').replace(/^\uFEFF/, '').replace(/\r/g, '');
+        var blocks = clean.split(/\n\n+/);
         for (var i = 0; i < blocks.length; i++) {
             var lines = blocks[i].split('\n');
-            // Skip optional numeric index
-            var idx = 0;
-            if (/^\d+$/.test(lines[idx])) idx++;
-            var m = /(\d\d):(\d\d):(\d\d)[,.](\d{3})\s*-->\s*(\d\d):(\d\d):(\d\d)[,.](\d{3})/.exec(lines[idx] || '');
-            if (!m) continue;
-            var start = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / 1000;
-            var end   = (+m[5]) * 3600 + (+m[6]) * 60 + (+m[7]) + (+m[8]) / 1000;
-            var text  = lines.slice(idx + 1).join('\n').trim();
-            if (text) out.push({ start: start, end: end, text: text });
+            var tcIdx = -1, m = null;
+            for (var j = 0; j < lines.length; j++) {
+                m = TIMECODE_RE.exec(lines[j]);
+                if (m) { tcIdx = j; break; }
+            }
+            if (tcIdx < 0) continue;
+            var start = tcToSecs(m[1], m[2], m[3], m[4]);
+            var end   = tcToSecs(m[5], m[6], m[7], m[8]);
+            var text  = lines.slice(tcIdx + 1).join('\n').trim();
+            if (text && end > start) out.push({ start: start, end: end, text: text });
         }
         return out;
     }
     function parseVttCues(vtt) {
-        // Strip the WEBVTT header then treat the body like SRT (timecodes use
-        // dot-decimal; the regex in parseSrtCues accepts both . and ,).
-        var body = String(vtt || '').replace(/^WEBVTT[^\n]*\n/, '');
+        // Strip the WEBVTT header line then treat the body like SRT —
+        // parseSrtCues handles the rest (blank lines, cue ids, dot/comma).
+        var body = String(vtt || '').replace(/^\uFEFF/, '').replace(/^WEBVTT[^\n]*\n/, '');
         return parseSrtCues(body);
+    }
+
+    /* ASS / SSA → cues, parsed DIRECTLY into [{start,end,text}] rather than
+     * round-tripping through a VTT string (the old path lost the first cue
+     * and was brittle).  AVPlay's native renderer can't draw ASS on this
+     * firmware, so every ASS subtitle is painted through this poller path.
+     *
+     * Dialogue line:  Dialogue: Layer,Start,End,Style,Name,ML,MR,MV,Effect,Text
+     * Times are H:MM:SS.cc (centiseconds).  Override tags ({\an8} etc.),
+     * \N / \n line breaks and \h hard-spaces are normalised away. */
+    function parseAssCues(ass) {
+        var out = [];
+        var lines = String(ass || '').replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n');
+        var fmt = null;
+        var inEvents = false;
+
+        for (var i = 0; i < lines.length; i++) {
+            var l = lines[i].trim();
+            if (l.charAt(0) === '[' && l.charAt(l.length - 1) === ']') {
+                inEvents = (l.toLowerCase() === '[events]');
+                continue;
+            }
+            if (!inEvents) continue;
+
+            if (l.toLowerCase().indexOf('format:') === 0) {
+                fmt = l.substring(7).split(',').map(function (s) { return s.trim().toLowerCase(); });
+                continue;
+            }
+            if (l.toLowerCase().indexOf('dialogue:') !== 0) continue;
+            if (!fmt) fmt = ['layer','start','end','style','name','marginl','marginr','marginv','effect','text'];
+
+            // Split into fmt.length-1 comma fields; the remainder is the Text
+            // field (which itself may contain commas).
+            var rest = l.substring(9).trim();
+            var parts = [];
+            var idx = 0;
+            for (var k = 0; k < fmt.length - 1; k++) {
+                var comma = rest.indexOf(',', idx);
+                if (comma < 0) break;
+                parts.push(rest.substring(idx, comma));
+                idx = comma + 1;
+            }
+            parts.push(rest.substring(idx));
+
+            var sI = fmt.indexOf('start'), eI = fmt.indexOf('end'), tI = fmt.indexOf('text');
+            if (sI < 0 || eI < 0 || tI < 0) continue;
+
+            var start = assTimeToSecs(parts[sI]);
+            var end   = assTimeToSecs(parts[eI]);
+            if (start == null || end == null || end <= start) continue;
+
+            var text = (parts[tI] || '')
+                .replace(/\{[^}]*\}/g, '')   // {\b1}, {\an8}, drawing tags …
+                .replace(/\\N/gi, '\n')      // hard + soft line breaks
+                .replace(/\\h/gi, ' ')       // hard space
+                .replace(/<[^>]+>/g, '')     // stray HTML
+                .trim();
+            if (text) out.push({ start: start, end: end, text: text });
+        }
+        // ASS dialogue lines aren't required to be in chronological order;
+        // the poller's scan assumes sorted cues, so sort by start.
+        out.sort(function (a, b) { return a.start - b.start; });
+        return out;
+    }
+    function assTimeToSecs(t) {
+        var m = /^\s*(\d+):(\d{1,2}):(\d{1,2})[.,](\d{1,3})\s*$/.exec(String(t || ''));
+        if (!m) return null;
+        return tcToSecs(m[1], m[2], m[3], m[4]);
     }
 
     var avPollTimer = null;
@@ -434,14 +503,20 @@ var Player = (function () {
                     avSetDisplayRect();
                     avSetDisplayMethod();
 
-                    /* Pre-apply preferred external subtitle BEFORE play() —
-                     * calling setExternalSubtitlePath after play() triggers a
-                     * silent seek to mid-file on Tizen 5.0.  Doing it here,
-                     * with AVPlay in the READY state, avoids the bug. */
+                    /* Pre-apply the preferred external subtitle BEFORE play()
+                     * through the JS time-poller, NOT AVPlay's native
+                     * setExternalSubtitlePath.  The native renderer can't draw
+                     * ASS/SSA on this firmware (and carried the mid-file seek
+                     * bug); the poller paints every format into
+                     * #subtitle-overlay, so it both fixes ASS and lets the
+                     * user's size/font/position settings apply.  Keep AVPlay's
+                     * own renderer silent so only our overlay shows.  (The CC
+                     * menu and applyLanguagePreferences use the same path
+                     * mid-playback.) */
                     if (typeof Settings !== 'undefined') {
                         var pref = Settings.get('subtitleLang');
                         var sub  = pickBestExternalSubtitle(pref);
-                        if (sub) setAvExternalSubtitle(sub);
+                        if (sub) applyExternalSubtitleLive(sub);
                     }
 
                     try { av().play(); } catch (e) {}
