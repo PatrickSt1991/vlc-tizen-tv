@@ -121,8 +121,13 @@ function md4(buf) {
     out.writeUInt32LE(c >>> 0, 8); out.writeUInt32LE(d >>> 0, 12);
     return out;
 }
-function hmacMd5(key, data)    { return crypto.createHmac('md5',    key).update(data).digest(); }
-function hmacSha256(key, data) { return crypto.createHmac('sha256', key).update(data).digest(); }
+/* The TV's crypto rejects our polyfilled (legacy, non-Uint8Array) Buffers with
+ * "this is not a typed array", while accepting its own crypto.randomBytes()
+ * output — so hand crypto genuine typed arrays. No-op on real Node (Buffer is
+ * already a Uint8Array). */
+function toU8(b) { return (b instanceof Uint8Array) ? b : new Uint8Array(b); }
+function hmacMd5(key, data)    { return crypto.createHmac('md5',    toU8(key)).update(toU8(data)).digest(); }
+function hmacSha256(key, data) { return crypto.createHmac('sha256', toU8(key)).update(toU8(data)).digest(); }
 /* The TV's partial Buffer can't do string encodings ('ucs2'/'binary' throw
  * "<enc> is not a function"), so build/decode UTF-16LE and ASCII by hand. */
 function utf16le(str) {
@@ -837,4 +842,7 @@ var server = http.createServer(function (req, res) {
 
 server.listen(PORT, LISTEN_HOST, function () { log('SMB_PROXY_LISTENING', LISTEN_HOST + ':' + PORT); });
 
-process.on('uncaughtException', function (e) { log('UNCAUGHT', e && e.message); });
+process.on('uncaughtException', function (e) {
+    var where = (e && e.stack) ? String(e.stack).split('\n').slice(0, 4).join(' <- ') : '';
+    log('UNCAUGHT', (e && e.message) + (where ? ' | ' + where : ''));
+});
