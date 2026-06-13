@@ -123,7 +123,24 @@ function md4(buf) {
 }
 function hmacMd5(key, data)    { return crypto.createHmac('md5',    key).update(data).digest(); }
 function hmacSha256(key, data) { return crypto.createHmac('sha256', key).update(data).digest(); }
-function utf16le(str)          { return Buffer.from(str || '', 'ucs2'); }
+/* The TV's partial Buffer can't do string encodings ('ucs2'/'binary' throw
+ * "<enc> is not a function"), so build/decode UTF-16LE and ASCII by hand. */
+function utf16le(str) {
+    str = (str == null) ? '' : String(str);
+    var b = Buffer.alloc(str.length * 2);
+    for (var i = 0; i < str.length; i++) b.writeUInt16LE(str.charCodeAt(i) & 0xFFFF, i * 2);
+    return b;
+}
+function fromUtf16le(buf, start, end) {
+    var s = '';
+    for (var i = start; i + 1 < end; i += 2) s += String.fromCharCode(buf.readUInt16LE(i));
+    return s;
+}
+function asciiBytes(str) {
+    var b = Buffer.alloc(str.length);
+    for (var i = 0; i < str.length; i++) b[i] = str.charCodeAt(i) & 0xFF;
+    return b;
+}
 
 /* ── 64-bit LE helpers (JS-number-safe up to 2^53 ≈ 9 PB, plenty for files) ─ */
 function writeU64LE(b, off, n) { b.writeUInt32LE(n % 4294967296 >>> 0, off); b.writeUInt32LE(Math.floor(n / 4294967296) >>> 0, off + 4); }
@@ -317,7 +334,7 @@ SmbConnection.prototype._negotiate = function (cb) {
 /* NTLMSSP type 1 (negotiate). */
 function ntlmType1() {
     var b = Buffer.alloc(32);
-    b.write('NTLMSSP\0', 0, 'binary');
+    asciiBytes('NTLMSSP\0').copy(b, 0);
     b.writeUInt32LE(1, 8);          // MessageType
     b.writeUInt32LE(NTLM_F, 12);    // NegotiateFlags
     // Domain + Workstation fields left zero
@@ -417,7 +434,7 @@ SmbConnection.prototype._buildNtlmType3 = function (challengeBuf) {
     // EncryptedRandomSessionKey: empty
 
     var hdr = Buffer.alloc(fixed);
-    hdr.write('NTLMSSP\0', 0, 'binary');
+    asciiBytes('NTLMSSP\0').copy(hdr, 0);
     hdr.writeUInt32LE(3, 8);                       // MessageType
     field(lmResp.length, lmOff).copy(hdr, 12);     // LmChallengeResponse
     field(ntResp.length, ntOff).copy(hdr, 20);     // NtChallengeResponse
@@ -454,7 +471,7 @@ SmbConnection.prototype._buildAnonymousType3 = function () {
     var wsOff = cur; cur += wsB.length;
 
     var hdr = Buffer.alloc(fixed);
-    hdr.write('NTLMSSP\0', 0, 'binary');
+    asciiBytes('NTLMSSP\0').copy(hdr, 0);
     hdr.writeUInt32LE(3, 8);
     field(lmResp.length, lmOff).copy(hdr, 12);
     field(ntResp.length, ntOff).copy(hdr, 20);
@@ -615,7 +632,7 @@ function parseDirInfo(buf, out) {
         var endOf  = readU64LE(buf, p + 40);          // EndOfFile (size)
         var attrs  = buf.readUInt32LE(p + 56);        // FileAttributes
         var nameLn = buf.readUInt32LE(p + 60);
-        var name   = buf.slice(p + 64, p + 64 + nameLn).toString('ucs2');
+        var name   = fromUtf16le(buf, p + 64, p + 64 + nameLn);
         if (name !== '.' && name !== '..') {
             out.push({ name: name, isDir: !!(attrs & 0x10), size: (attrs & 0x10) ? 0 : endOf });
         }
