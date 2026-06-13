@@ -177,6 +177,7 @@
         switch (action) {
             case 'open-url':           UI.showView('view-url'); state.view = 'url'; break;
             case 'browse-usb':         openBrowserAtRoot(); break;
+            case 'browse-smb':         SMB.openBrowser(); break;
             case 'browse-recent':      openRecent(); break;
             case 'open-settings':      openSettings(); break;
             case 'open-current-url': {
@@ -1117,6 +1118,10 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+
+    // Public hooks used by js/smb.js to hand SMB playback back to the app so it
+    // reuses next/prev, auto-play, recent & watched tracking.
+    window.VlcApp = { play: playFromList, home: backToHome, openSettings: openSettings };
 
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', init);
