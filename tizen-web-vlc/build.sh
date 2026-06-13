@@ -22,7 +22,8 @@ zip -rq "${OUT}" \
     index.html \
     icon.png \
     css \
-    js
+    js \
+    service
 
 # Quick sanity-check: warn if Debug is still enabled in a "release" build
 if grep -q '^    var DEBUG    = true;' js/debug.js 2>/dev/null; then

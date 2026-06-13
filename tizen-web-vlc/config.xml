@@ -6,17 +6,31 @@
         viewmodes="maximized">
     <tizen:application id="madebypatk.vlcweb"
                        package="madebypatk"
-                       required_version="2.4"/>
+                       required_version="4.0"/>
     <content src="index.html"/>
     <icon src="icon.png"/>
     <name>VLC TV</name>
     <author>Patrick</author>
-    <description>VLC-style media player for Samsung Tizen TV — plays network streams, USB files, HLS, DASH and more via AVPlay.</description>
+    <description>VLC-style media player for Samsung Tizen TV — plays network streams, USB files, SMB shares, HLS, DASH and more via AVPlay.</description>
 
     <tizen:profile name="tv-samsung"/>
 
+    <!-- Hybrid background service: a Node.js HTTP↔SMB2 proxy on localhost:8127.
+         The .wgt sandbox can't open raw TCP to port 445; this service can, and
+         re-serves files over HTTP with Range support so AVPlay can stream them.
+         Launched via tizen.application.launch('madebypatk.smbproxy'). -->
+    <tizen:service id="madebypatk.smbproxy" type="service">
+        <tizen:content src="service/service.js"/>
+        <tizen:name>smbproxy</tizen:name>
+    </tizen:service>
+
     <!-- Access any HTTP(S)/RTSP origin for streams + raw IP cameras. -->
     <access origin="*" subdomains="true"/>
+    <tizen:allow-navigation>*</tizen:allow-navigation>
+
+    <!-- App is a secure-context origin but talks to http://localhost for SMB. -->
+    <tizen:allow-mixed-content>true</tizen:allow-mixed-content>
+    <tizen:content-security-policy>default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src * http://127.0.0.1:8127 http://localhost:8127; media-src * http://127.0.0.1:8127 http://localhost:8127;</tizen:content-security-policy>
 
     <tizen:setting screen-orientation="landscape"
                    context-menu="disable"
@@ -30,6 +44,8 @@
     <!-- Privileges — internet for streams, mediastorage/externalstorage for USB
          file enumeration, download for future remote-file caching. -->
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/network.public"/>
+    <tizen:privilege name="http://tizen.org/privilege/application.launch"/>
     <tizen:privilege name="http://tizen.org/privilege/mediastorage"/>
     <tizen:privilege name="http://tizen.org/privilege/externalstorage"/>
     <tizen:privilege name="http://tizen.org/privilege/filesystem.read"/>
