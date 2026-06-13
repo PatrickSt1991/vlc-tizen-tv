@@ -28,6 +28,22 @@ var http   = require('http');
 var net    = require('net');
 var crypto = require('crypto');
 
+/* The TV's Node runtime predates Buffer.alloc / Buffer.from (added in Node
+ * 4.5/5.10) — it only has the legacy `new Buffer()` constructor. Without this
+ * shim every SMB request throws "Buffer.alloc is not a function" the moment a
+ * connection is built, so /smb/ping works but /smb/connect hangs and times out.
+ * Polyfill onto the legacy constructor, matching alloc's zero-fill semantics. */
+if (typeof Buffer.alloc !== 'function') {
+    Buffer.alloc = function (size, fill) {
+        var b = new Buffer(size);
+        b.fill(fill === undefined ? 0 : fill);
+        return b;
+    };
+}
+if (typeof Buffer.from !== 'function') {
+    Buffer.from = function (data, encoding) { return new Buffer(data, encoding); };
+}
+
 var PORT        = 8127;
 var LISTEN_HOST = '127.0.0.1';
 
@@ -697,11 +713,19 @@ function handleConnect(req, res) {
         // Drop any stale connection for this share so creds changes take effect.
         var key = connKey(creds);
         if (conns[key]) { try { conns[key]._die('reconnect'); } catch (e) {} delete conns[key]; }
-        getConn(creds, function (err, c) {
-            if (err) { log('CONNECT_FAIL', err.message); return sendJson(res, 502, { ok: false, error: err.message }); }
-            lastCreds = creds;
-            sendJson(res, 200, { ok: true, dialect: '0x' + c.dialect.toString(16), signing: c.signing });
-        });
+        // Wrap so a synchronous throw (e.g. a missing runtime API) returns an
+        // error to the client immediately instead of bubbling to the uncaught
+        // handler and leaving the request to time out.
+        try {
+            getConn(creds, function (err, c) {
+                if (err) { log('CONNECT_FAIL', err.message); return sendJson(res, 502, { ok: false, error: err.message }); }
+                lastCreds = creds;
+                sendJson(res, 200, { ok: true, dialect: '0x' + c.dialect.toString(16), signing: c.signing });
+            });
+        } catch (e) {
+            log('CONNECT_THREW', e && e.message);
+            sendJson(res, 500, { ok: false, error: 'service error: ' + (e && e.message) });
+        }
     });
 }
 
