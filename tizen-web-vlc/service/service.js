@@ -236,13 +236,30 @@ SmbConnection.prototype._send = function (command, body, creditCharge, cb) {
 /* ── connect: open socket, then NEGOTIATE → SESSION_SETUP → TREE_CONNECT ──── */
 SmbConnection.prototype.connect = function (done) {
     var self = this;
+
+    // Single-shot completion: a connect can only succeed or fail once, so guard
+    // against the timer / 'error' / 'close' all racing to call back.
+    var settled = false;
+    function finish(err) {
+        if (settled) return; settled = true;
+        clearTimeout(timer);
+        done && done(err);
+    }
+    // net.connect to a dead/filtered host:445 otherwise hangs for the OS TCP
+    // timeout (minutes), so the HTTP POST just times out with no explanation.
+    var timer = setTimeout(function () {
+        log('SMB_CONNECT_TIMEOUT', self.host + ':' + self.port);
+        self._die('connect timeout');
+        finish(new Error('connect timed out to ' + self.host + ':' + self.port + ' (host/port/firewall?)'));
+    }, 8000);
+
     this.socket = net.connect(this.port, this.host, function () {
         log('SMB_TCP_OPEN', self.host + ':' + self.port);
         self._negotiate(function (err) {
-            if (err) return done(err);
+            if (err) return finish(err);
             self._sessionSetup(function (err2) {
-                if (err2) return done(err2);
-                self._treeConnect(done);
+                if (err2) return finish(err2);
+                self._treeConnect(finish);
             });
         });
     });
@@ -251,8 +268,8 @@ SmbConnection.prototype.connect = function (done) {
         self.rxbuf = Buffer.concat([self.rxbuf, chunk]);
         self._frame();
     });
-    this.socket.on('error', function (e) { self._die('sock:' + e.message); done && done(e); });
-    this.socket.on('close', function () { self._die('closed'); });
+    this.socket.on('error', function (e) { log('SMB_SOCK_ERR', e.message); self._die('sock:' + e.message); finish(e); });
+    this.socket.on('close', function () { self._die('closed'); finish(new Error('connection closed before ready')); });
 };
 
 SmbConnection.prototype._negotiate = function (cb) {

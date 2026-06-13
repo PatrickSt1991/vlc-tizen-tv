@@ -17,6 +17,22 @@ var SMB = (function () {
     var BASE = 'http://127.0.0.1:8127';
     var CREDS_KEY = 'vlctv_smb_v1';
 
+    /* All SMB-side activity goes to the PC debug listener under one tag so the
+     * connection flow is actually traceable (the old code called Debug.log,
+     * which doesn't exist, so nothing was ever sent). */
+    function dbg(msg) { if (typeof Debug !== 'undefined' && Debug.send) Debug.send('SMB', msg); }
+
+    /* Pull the service's own ring-buffer log and forward the tail to the PC
+     * listener — this is how we see the NEGOTIATE / auth / socket errors that
+     * happen inside the background service, which can't reach the PC itself. */
+    function dumpServiceLogs() {
+        getJson(BASE + '/smb/debug/logs', function (err, res) {
+            if (err || !res || !res.logs) { dbg('service logs unavailable: ' + (err ? err.message : 'none')); return; }
+            var logs = res.logs, from = Math.max(0, logs.length - 40);
+            for (var i = from; i < logs.length; i++) dbg('svc ' + logs[i]);
+        });
+    }
+
     /* ── credentials ───────────────────────────────────────────────────── */
     function getCreds() {
         try { return JSON.parse(localStorage.getItem(CREDS_KEY) || '{}'); }
@@ -59,18 +75,19 @@ var SMB = (function () {
         try {
             var appId = tizen.application.getCurrentApplication().appInfo.id;
             var pkgId = appId.split('.')[0];
+            dbg('launching service ' + pkgId + '.smbproxy');
             tizen.application.launch(pkgId + '.smbproxy',
-                function () { if (typeof Debug !== 'undefined') Debug.log && Debug.log('smb svc launch ok'); },
-                function (e) { if (typeof Debug !== 'undefined') Debug.error && Debug.error('smb svc launch: ' + e.message); });
+                function () { dbg('service launch ok'); },
+                function (e) { dbg('service launch error: ' + (e && e.message)); });
         } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.error && Debug.error('smb launch threw: ' + e.message);
+            dbg('service launch threw: ' + e.message);
         }
         // The service may already be running from a previous open; poll either way.
         var tries = 0;
         (function poll() {
             getJson(BASE + '/smb/ping', function (err) {
-                if (!err) return cb(null);
-                if (++tries > 18) return cb(new Error('SMB service did not start'));
+                if (!err) { dbg('service ping ok after ' + tries + ' tries'); return cb(null); }
+                if (++tries > 18) { dbg('service ping gave up after ' + tries + ' tries: ' + err.message); return cb(new Error('SMB service did not start')); }
                 setTimeout(poll, 300);
             });
         })();
@@ -78,13 +95,16 @@ var SMB = (function () {
 
     function connect(cb) {
         var c = getCreds();
+        dbg('connect -> ' + (c.host || '?') + '\\' + (c.share || '?') +
+            ' user=' + (c.anonymous ? '(guest)' : (c.user || '(none)')));
         postJson(BASE + '/smb/connect', {
             host: c.host, share: c.share, user: c.user || '',
             pass: c.pass || '', domain: c.domain || '', port: c.port || 445,
             anonymous: !!c.anonymous
         }, function (err, res) {
-            if (err) return cb(err);
-            if (!res.ok) return cb(new Error(res.error || 'connect failed'));
+            if (err) { dbg('connect transport error: ' + err.message); return cb(err); }
+            if (!res.ok) { dbg('connect rejected: ' + (res.error || 'unknown')); return cb(new Error(res.error || 'connect failed')); }
+            dbg('connect ok: dialect=' + res.dialect + ' signing=' + res.signing);
             cb(null, res);
         });
     }
@@ -221,12 +241,21 @@ var SMB = (function () {
         document.getElementById('browse-list').innerHTML =
             '<li><span class="icon">…</span><span class="name">Connecting…</span></li>';
 
+        // Install Back BEFORE the async work so it works on the "connecting" and
+        // error screens too — otherwise Back falls through to the app's global
+        // handler, which still thinks we're on the home view and can't exit here.
+        pathStack = [];
+        setupBack();
+
+        dbg('openBrowser');
         ensureService(function (err) {
-            if (err) { showError(err.message); return; }
+            if (err) { dbg('ensureService failed: ' + err.message); showError(err.message); return; }
             connect(function (err2) {
-                if (err2) { showError('Could not connect: ' + err2.message); return; }
-                pathStack = [];
-                setupBack();
+                if (err2) {
+                    showError('Could not connect: ' + err2.message + ' — press Back to return');
+                    dumpServiceLogs();   // surface the service-side NEGOTIATE/auth/socket trail
+                    return;
+                }
                 render('');
             });
         });
