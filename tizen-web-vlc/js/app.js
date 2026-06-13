@@ -849,10 +849,36 @@
         UI.refreshFocusables();
     }
 
+    /* Type a digit from a remote number key (0-9) into the focused text field.
+     * The TV's on-screen keyboard handles letters; the hardware number keys
+     * arrive as key events that the browser doesn't insert on their own, so we
+     * insert them ourselves (handy for IP / port / numeric entry). Returns true
+     * if a field actually took the digit. */
+    function typeDigitIntoField(digit) {
+        var el = document.querySelector('.focused') || document.activeElement;
+        if (!el || el.tagName !== 'INPUT') return false;
+        var t = (el.type || 'text').toLowerCase();
+        if (t !== 'text' && t !== 'password' && t !== 'search' && t !== 'tel' && t !== 'number') return false;
+        var ch = String(digit);
+        try {
+            var s = el.selectionStart, e = el.selectionEnd;
+            if (s != null && e != null) {
+                el.value = el.value.slice(0, s) + ch + el.value.slice(e);
+                el.selectionStart = el.selectionEnd = s + ch.length;
+            } else { el.value += ch; }
+        } catch (ex) { el.value += ch; }
+        return true;
+    }
+
     /* ── Global remote key dispatcher ─────────────────────────────── */
     function globalKeyHandler(code, ev) {
         var K = Remote.KEY;
         if (typeof Debug !== 'undefined') Debug.key('code=' + code + ' view=' + state.view);
+
+        // Remote number buttons (0-9) type into a focused text field, so the
+        // hardware keys work alongside the on-screen keyboard. Only consumes the
+        // key when a text field actually took it, otherwise it falls through.
+        if (code >= K.ZERO && code <= K.NINE && typeDigitIntoField(code - K.ZERO)) return true;
 
         // URL input view: let typing flow through except on RETURN/Enter.
         if (state.view === 'url') {
