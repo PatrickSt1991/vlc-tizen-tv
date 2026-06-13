@@ -15,6 +15,8 @@ with VLC-inspired UI and TV remote-friendly navigation.
 - **Playback** via Samsung AVPlay — hardware-accelerated H.264 / HEVC / VP9,
   AAC / MP3 / AC3 / EAC3 / DTS, HLS / MPEG-DASH / RTSP / RTMP / Smooth-Streaming
 - **File browser** for USB drives + built-in storage (Videos, Downloads, etc.)
+- **SMB network shares** — browse and stream from SMB2 servers (NAS, Windows,
+  Samba) over your LAN; configure under Settings → SMB network share
 - **Network stream input** with preset chips for quick testing
 - **Cast from any device** — paste a stream URL from your phone, tablet or
   laptop instead of typing on the remote; QR pairing, no companion app, no
@@ -36,7 +38,13 @@ with VLC-inspired UI and TV remote-friendly navigation.
 - Samsung S90C (2023, Tizen 6.5) — MKV plays via AVPlay; DTS/TrueHD audio
   tracks can't be decoded by the TV (auto-skipped to a supported track when
   the file has one)
-- Should run on any Tizen TV from 2017 onward with AVPlay support
+- Should run on any Tizen TV from 2017 onward with AVPlay support. **SMB share
+  support requires Tizen 4.0+ (2018 sets onward)** — it relies on a background
+  service application that older firmware doesn't run.
+
+> **SMB credentials note:** server credentials you enter under Settings are
+> stored unencrypted in the app's local storage on the TV. Prefer a dedicated
+> guest/read-only share account over reusing a sensitive password.
 
 ## Installation
 
