@@ -134,12 +134,12 @@ jobs:
 
 
             2. **Choose your installation method:**
-              ### ✅ Easy — via Jellyfin2Samsung (recommended)
-              Download and install automatically through [Jellyfin2Samsung](https://jellyfin2samsung.madebypatrick.nl/):
+              ### ✅ Easy — via Apps2Samsung (recommended)
+              Download and install automatically through [Apps2Samsung](https://apps2samsung.madebypatrick.nl/):
               - Open the app, select **Tizen Community** as the release channel
               - Pick **vlc-tizen-tv** and follow the on-screen steps
 
-              > Jellyfin2Samsung handles signing and sideloading for you.
+              > Apps2Samsung handles signing and sideloading for you.
 
               ---
                
