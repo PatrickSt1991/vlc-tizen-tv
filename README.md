@@ -60,9 +60,9 @@ files are published there by the build workflow.
 
 ### 2. Install the `.wgt`
 
-#### Install with Jellyfin2Samsung
+#### Install with Apps2Samsung
 
-Download the latest version from [Jellyfin2Samsung](https://github.com/Jellyfin2Samsung/Samsung-Jellyfin-Installer/releases/latest) choose Tizen Community as release and choose vlc-tizen-tv.
+Download the latest version from [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung/releases/latest) choose Tizen Community as release and choose vlc-tizen-tv.
 
 Launch **VLC TV** from your TV's app list.
 
