@@ -156,6 +156,7 @@ function SmbConnection(opts) {
     this.pending = {};            // messageId -> cb(status, header, body)
     this.dead    = false;
     this.dialect = 0;
+    this.maxRead = 65536;         // server's MaxReadSize; 64 KiB until NEGOTIATE
 }
 
 SmbConnection.prototype._frame = function () {
@@ -262,7 +263,7 @@ SmbConnection.prototype._negotiate = function (cb) {
     body.writeUInt16LE(dialects.length, 2);          // DialectCount
     body.writeUInt16LE(0x0001, 4);                   // SecurityMode = signing enabled
     body.writeUInt16LE(0, 6);                        // Reserved
-    body.writeUInt32LE(0, 8);                        // Capabilities
+    body.writeUInt32LE(0x00000004, 8);               // Capabilities = LARGE_MTU (multi-credit reads on 2.1)
     crypto.randomBytes(16).copy(body, 12);           // ClientGuid
     writeU64LE(body, 28, 0);                         // ClientStartTime
     for (var i = 0; i < dialects.length; i++) body.writeUInt16LE(dialects[i], 36 + i * 2);
@@ -272,7 +273,10 @@ SmbConnection.prototype._negotiate = function (cb) {
         self.dialect = resp.readUInt16LE(4);
         var securityMode = resp.readUInt16LE(2);
         self.signing = !!(securityMode & 0x0002); // server marks signing REQUIRED
-        log('SMB_NEGOTIATE', { dialect: '0x' + self.dialect.toString(16), signingRequired: self.signing });
+        // MaxReadSize@32. Clamp our per-READ size to it so we never exceed the
+        // server's limit (64 KiB on 2.0.2 → single-credit; larger on 2.1).
+        self.maxRead = resp.readUInt32LE(32) || 65536;
+        log('SMB_NEGOTIATE', { dialect: '0x' + self.dialect.toString(16), signingRequired: self.signing, maxRead: self.maxRead });
         cb(null);
     });
 };
@@ -308,6 +312,26 @@ function findAvTimestamp(ti) {
     return null;
 }
 
+/* OR `flag` into MsvAvFlags (AvId 0x06) inside target info, adding the pair
+ * before MsvAvEOL if it isn't already there. Used to set the "MIC present"
+ * bit (0x2) so servers that pin the authenticate message don't reject us. */
+function setMsvAvFlag(ti, flag) {
+    var p = 0, eol = ti.length;
+    while (p + 4 <= ti.length) {
+        var id = ti.readUInt16LE(p), len = ti.readUInt16LE(p + 2);
+        if (id === 0x0000) { eol = p; break; }       // MsvAvEOL
+        if (id === 0x0006 && len === 4) {            // MsvAvFlags already present
+            var out = Buffer.from(ti);
+            out.writeUInt32LE((out.readUInt32LE(p + 4) | flag) >>> 0, p + 4);
+            return out;
+        }
+        p += 4 + len;
+    }
+    var pair = Buffer.alloc(8);
+    pair.writeUInt16LE(0x0006, 0); pair.writeUInt16LE(4, 2); pair.writeUInt32LE(flag >>> 0, 4);
+    return Buffer.concat([ti.slice(0, eol), pair, ti.slice(eol)]);
+}
+
 /* NTLMSSP type 3 (authenticate) + the derived session key. */
 SmbConnection.prototype._buildNtlmType3 = function (challengeBuf) {
     var t2 = parseNtlmType2(challengeBuf);
@@ -320,33 +344,38 @@ SmbConnection.prototype._buildNtlmType3 = function (challengeBuf) {
     // "temp" / NTLMv2 client blob
     var clientChallenge = crypto.randomBytes(8);
     var ts = findAvTimestamp(t2.targetInfo);
-    if (!ts) { ts = Buffer.alloc(8, 0); }   // fall back to zero timestamp
+    var haveTs = !!ts;                       // server sent a timestamp → emit a MIC
+    if (!ts) { ts = Buffer.alloc(8, 0); }    // fall back to zero timestamp
+
+    // When emitting a MIC we must flag it in the echoed AV pairs (bit 0x2).
+    var targetInfo = haveTs ? setMsvAvFlag(t2.targetInfo, 0x00000002) : t2.targetInfo;
 
     var blob = Buffer.concat([
         Buffer.from([0x01, 0x01, 0, 0, 0, 0, 0, 0]),  // RespType=1, HiRespType=1, Reserved
         ts,                                           // timestamp (FILETIME)
         clientChallenge,                              // 8 bytes
         Buffer.from([0, 0, 0, 0]),                    // Reserved
-        t2.targetInfo,                                // server's AV pairs, echoed
+        targetInfo,                                   // server's AV pairs, echoed (+MIC flag)
         Buffer.from([0, 0, 0, 0])                     // Reserved
     ]);
 
     var ntProof = hmacMd5(ntlmv2Key, Buffer.concat([t2.challenge, blob]));
     var ntResp  = Buffer.concat([ntProof, blob]);
-    var lmResp  = Buffer.concat([hmacMd5(ntlmv2Key, Buffer.concat([t2.challenge, clientChallenge])), clientChallenge]);
-    var sessionKey = hmacMd5(ntlmv2Key, ntProof);   // no key-exchange → base key is it
+    // Spec: with a timestamp present, LM response is Z(24); otherwise LMv2.
+    var lmResp  = haveTs
+        ? Buffer.alloc(24, 0)
+        : Buffer.concat([hmacMd5(ntlmv2Key, Buffer.concat([t2.challenge, clientChallenge])), clientChallenge]);
+    var sessionKey = hmacMd5(ntlmv2Key, ntProof);   // ExportedSessionKey (no key exch)
 
     var domB = utf16le(this.domain);
     var userB = utf16le(this.user);
     var wsB   = utf16le('VLCTV');
 
-    // Type3 fixed part = 64 bytes (no version), payload appended after.
-    var fixed = 72;  // include 8-byte Version field (zeros) for compatibility
-    var payloadOff = fixed;
+    // Fixed part: 8 sig + 4 type + 6×8 fields + 4 flags + 8 version + 16 MIC = 88.
+    var fixed = 88;
     function field(len, off) { var f = Buffer.alloc(8); f.writeUInt16LE(len, 0); f.writeUInt16LE(len, 2); f.writeUInt32LE(off, 4); return f; }
 
-    var parts = [];
-    var cur = payloadOff;
+    var cur = fixed;
     var lmOff = cur; cur += lmResp.length;
     var ntOff = cur; cur += ntResp.length;
     var domOff = cur; cur += domB.length;
@@ -364,9 +393,15 @@ SmbConnection.prototype._buildNtlmType3 = function (challengeBuf) {
     field(wsB.length,   wsOff).copy(hdr, 44);      // Workstation
     field(0,            cur).copy(hdr, 52);        // EncryptedRandomSessionKey (empty)
     hdr.writeUInt32LE(NTLM_F, 60);                 // NegotiateFlags
-    // 64..71 Version = zeros
+    // 64..71 Version = zeros, 72..87 MIC = zeros (filled below)
 
     var token = Buffer.concat([hdr, lmResp, ntResp, domB, userB, wsB]);
+
+    // MIC = HMAC_MD5(ExportedSessionKey, type1 || type2 || type3-with-zero-MIC).
+    if (haveTs) {
+        var mic = hmacMd5(sessionKey, Buffer.concat([ntlmType1(), challengeBuf, token]));
+        mic.copy(token, 72);
+    }
     return { token: token, sessionKey: sessionKey };
 };
 
@@ -420,7 +455,9 @@ SmbConnection.prototype._sessionSetup = function (done) {
             return done(new Error('SESSION_SETUP r1 unexpected 0x' + (status >>> 0).toString(16)));
         // Server assigns SessionId here; use it for every subsequent request.
         hdr.copy(self.sessionId, 0, 40, 48);
-        var secOff = resp.readUInt16LE(2), secLen = resp.readUInt16LE(4);
+        // SESSION_SETUP response: StructureSize(2), SessionFlags(2),
+        // SecurityBufferOffset(2)@4, SecurityBufferLength(2)@6.
+        var secOff = resp.readUInt16LE(4), secLen = resp.readUInt16LE(6);
         var challenge = resp.slice(secOff - 64, secOff - 64 + secLen);
         var t3;
         if (self.anonymous) {
@@ -574,7 +611,9 @@ SmbConnection.prototype.read = function (fileId, offset, length, cb) {
     this._send(SMB2.READ, body, charge, function (status, hdr, resp) {
         if (status === ST.END_OF_FILE) return cb(null, Buffer.alloc(0));
         if (status !== ST.SUCCESS) return cb(new Error('read 0x' + (status >>> 0).toString(16)));
-        var dataOff = resp.readUInt8(0) - 64;
+        // READ response: StructureSize(2), DataOffset(1)@2, Reserved(1),
+        // DataLength(4)@4. DataOffset is from the SMB2 header start.
+        var dataOff = resp.readUInt8(2) - 64;
         var dataLen = resp.readUInt32LE(4);
         cb(null, resp.slice(dataOff, dataOff + dataLen));
     });
@@ -707,7 +746,9 @@ function handleStream(req, res, query) {
 
             function pump() {
                 if (aborted || remaining <= 0) { c.close(file.fileId); if (!aborted) res.end(); return; }
-                var want = Math.min(READ_CHUNK, remaining);
+                // Never exceed the server's MaxReadSize, or a 2.0.2 server (64 KiB,
+                // single-credit) rejects the over-large multi-credit READ.
+                var want = Math.min(READ_CHUNK, c.maxRead, remaining);
                 c.read(file.fileId, pos, want, function (re, data) {
                     if (aborted) { c.close(file.fileId); return; }
                     if (re)            { c.close(file.fileId); try { res.end(); } catch (e) {} return; }

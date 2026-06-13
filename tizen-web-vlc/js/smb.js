@@ -242,15 +242,24 @@ var SMB = (function () {
             var el = document.getElementById('smb-' + k);
             if (el && c[k] != null) el.value = c[k];
         });
-        var anon = document.getElementById('smb-anon');
-        if (anon) anon.checked = !!c.anonymous;
+
+        // Guest is a toggle button (not a checkbox): the D-pad's geometric nav
+        // can't reliably land on a small right-aligned checkbox, but a
+        // full-width row matches every other setting and gets focus cleanly.
+        var anonBtn = document.getElementById('smb-anon');
+        var anonVal = document.getElementById('smb-anon-val');
+        var anonState = !!c.anonymous;
+        function paintAnon() { if (anonVal) anonVal.textContent = anonState ? 'On' : 'Off'; }
+        paintAnon();
+        if (anonBtn) anonBtn.addEventListener('click', function () { anonState = !anonState; paintAnon(); });
+
         btn.addEventListener('click', function () {
             var nc = {};
             ids.forEach(function (k) {
                 var el = document.getElementById('smb-' + k);
                 nc[k] = el ? el.value.trim() : '';
             });
-            nc.anonymous = !!(anon && anon.checked);
+            nc.anonymous = anonState;
             setCreds(nc);
             UI.toast('SMB server saved');
         });

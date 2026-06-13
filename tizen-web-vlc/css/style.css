@@ -110,7 +110,7 @@ button:focus { outline: none; }
 /* ── Home tiles ───────────────────────────────────────────────────── */
 .home-tiles {
     display: grid; grid-gap: 28px;   /* grid-gap, not gap: TV WebView is Chromium 63 */
-    grid-template-columns: repeat(4, 280px);
+    grid-template-columns: repeat(5, 280px);   /* 5×280 + 4×28 = 1512px, fits 1080p */
     justify-content: center;
 }
 
@@ -680,6 +680,32 @@ button:focus { outline: none; }
     box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .settings-label { font-size: 24px; }
+
+/* SMB text fields: stack the label above a full-width input so the focusable
+ * <input> shares the same horizontal centre as the full-width button rows.
+ * The D-pad nav is geometric and penalises horizontal offset, so a narrow
+ * right-aligned input gets skipped over — a centred, full-width one doesn't. */
+.settings-row-input {
+    flex-direction: column;
+    align-items: stretch;
+}
+.settings-row-input .settings-label { margin-bottom: 12px; }
+.settings-row-input input {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 22px;
+    padding: 12px 16px;
+    background: var(--bg);
+    border: 2px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--fg);
+}
+.settings-row-input:focus-within,
+.settings-row-input input:focus,
+.settings-row-input input.focused {
+    border-color: var(--accent);
+    outline: none;
+}
 .settings-value {
     font-size: 20px;
     color: var(--accent);

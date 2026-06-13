@@ -210,13 +210,13 @@
 
         <h2 class="settings-section-title">SMB network share</h2>
         <div class="settings-group">
-            <label class="settings-row"><span class="settings-label">Server (IP/host)</span><input id="smb-host"   type="text"     placeholder="192.168.1.10"></label>
-            <label class="settings-row"><span class="settings-label">Share</span><input id="smb-share"  type="text"     placeholder="Media"></label>
-            <label class="settings-row"><span class="settings-label">Guest (no login)</span><input id="smb-anon" type="checkbox"></label>
-            <label class="settings-row"><span class="settings-label">Username</span><input id="smb-user"   type="text"     placeholder="guest"></label>
-            <label class="settings-row"><span class="settings-label">Password</span><input id="smb-pass"   type="password"></label>
-            <label class="settings-row"><span class="settings-label">Domain (optional)</span><input id="smb-domain" type="text"></label>
-            <button id="smb-save" class="settings-row" data-focus><span class="settings-label">Save SMB server</span></button>
+            <label class="settings-row settings-row-input"><span class="settings-label">Server (IP/host)</span><input id="smb-host"   type="text"     placeholder="192.168.1.10"></label>
+            <label class="settings-row settings-row-input"><span class="settings-label">Share</span><input id="smb-share"  type="text"     placeholder="Media"></label>
+            <button class="settings-row" id="smb-anon"><div class="settings-label">Guest (no login)</div><div class="settings-value" id="smb-anon-val">Off</div></button>
+            <label class="settings-row settings-row-input"><span class="settings-label">Username</span><input id="smb-user"   type="text"     placeholder="guest"></label>
+            <label class="settings-row settings-row-input"><span class="settings-label">Password</span><input id="smb-pass"   type="password"></label>
+            <label class="settings-row settings-row-input"><span class="settings-label">Domain (optional)</span><input id="smb-domain" type="text"></label>
+            <button id="smb-save" class="settings-row"><span class="settings-label">Save SMB server</span></button>
         </div>
 
         <h2 class="settings-section-title">Subtitle appearance</h2>
