@@ -121,13 +121,18 @@ function md4(buf) {
     out.writeUInt32LE(c >>> 0, 8); out.writeUInt32LE(d >>> 0, 12);
     return out;
 }
-/* The TV's crypto rejects our polyfilled (legacy, non-Uint8Array) Buffers with
- * "this is not a typed array", while accepting its own crypto.randomBytes()
- * output — so hand crypto genuine typed arrays. No-op on real Node (Buffer is
- * already a Uint8Array). */
-function toU8(b) { return (b instanceof Uint8Array) ? b : new Uint8Array(b); }
-function hmacMd5(key, data)    { return crypto.createHmac('md5',    toU8(key)).update(toU8(data)).digest(); }
-function hmacSha256(key, data) { return crypto.createHmac('sha256', toU8(key)).update(toU8(data)).digest(); }
+function hmacMd5(key, data)    { return crypto.createHmac('md5',    key).update(data).digest(); }
+function hmacSha256(key, data) { return crypto.createHmac('sha256', key).update(data).digest(); }
+
+/* The TV's native Buffer.from accepts typed arrays/strings but throws "this is
+ * not a typed array" on a plain number array — and the polyfill above never
+ * runs because Buffer.from already exists. Build small constant byte buffers
+ * via Buffer.alloc + index assignment, which the runtime does support. */
+function bytes(arr) {
+    var b = Buffer.alloc(arr.length);
+    for (var i = 0; i < arr.length; i++) b[i] = arr[i] & 0xFF;
+    return b;
+}
 /* The TV's partial Buffer can't do string encodings ('ucs2'/'binary' throw
  * "<enc> is not a function"), so build/decode UTF-16LE and ASCII by hand. */
 function utf16le(str) {
@@ -376,7 +381,7 @@ function setMsvAvFlag(ti, flag) {
         var id = ti.readUInt16LE(p), len = ti.readUInt16LE(p + 2);
         if (id === 0x0000) { eol = p; break; }       // MsvAvEOL
         if (id === 0x0006 && len === 4) {            // MsvAvFlags already present
-            var out = Buffer.from(ti);
+            var out = Buffer.alloc(ti.length); ti.copy(out);
             out.writeUInt32LE((out.readUInt32LE(p + 4) | flag) >>> 0, p + 4);
             return out;
         }
@@ -406,12 +411,12 @@ SmbConnection.prototype._buildNtlmType3 = function (challengeBuf) {
     var targetInfo = haveTs ? setMsvAvFlag(t2.targetInfo, 0x00000002) : t2.targetInfo;
 
     var blob = Buffer.concat([
-        Buffer.from([0x01, 0x01, 0, 0, 0, 0, 0, 0]),  // RespType=1, HiRespType=1, Reserved
+        bytes([0x01, 0x01, 0, 0, 0, 0, 0, 0]),  // RespType=1, HiRespType=1, Reserved
         ts,                                           // timestamp (FILETIME)
         clientChallenge,                              // 8 bytes
-        Buffer.from([0, 0, 0, 0]),                    // Reserved
+        bytes([0, 0, 0, 0]),                    // Reserved
         targetInfo,                                   // server's AV pairs, echoed (+MIC flag)
-        Buffer.from([0, 0, 0, 0])                     // Reserved
+        bytes([0, 0, 0, 0])                     // Reserved
     ]);
 
     var ntProof = hmacMd5(ntlmv2Key, Buffer.concat([t2.challenge, blob]));
@@ -463,7 +468,7 @@ SmbConnection.prototype._buildNtlmType3 = function (challengeBuf) {
 /* NTLMSSP type 3 for an anonymous (guest) logon: empty NT response, a single
  * zero LM byte, and the ANONYMOUS flag. No session key, so no signing. */
 SmbConnection.prototype._buildAnonymousType3 = function () {
-    var lmResp = Buffer.from([0x00]);   // Z(1) per MS-NLMP anonymous rule
+    var lmResp = bytes([0x00]);   // Z(1) per MS-NLMP anonymous rule
     var ntResp = Buffer.alloc(0);
     var domB = Buffer.alloc(0), userB = Buffer.alloc(0), wsB = utf16le('VLCTV');
     var fixed = 72;
