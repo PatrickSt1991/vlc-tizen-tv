@@ -440,27 +440,32 @@
         // Watchdog: detect two failure modes —
         //   1. AVPlay never reaches PLAYING within 20 s (stuck in IDLE/READY)
         //   2. AVPlay reports PLAYING but currentTime stays at 0 for 10 s
-        //      (codec unsupported — most often HEVC Main10 on a TV that only
-        //      supports HEVC Main8).
+        //      AND we're not buffering — i.e. a real codec stall, not a
+        //      slow source still filling its buffer (common on the SMB
+        //      proxy path for small or oddly-laid-out files).
         clearInterval(openWatchdog);
         var watchdogStart = Date.now();
         openWatchdog = setInterval(function () {
             var elapsed = Date.now() - watchdogStart;
             var state   = Player.state();
             var time    = Player.currentTime();
+            var buffering  = (typeof Player.isBuffering === 'function') ? Player.isBuffering() : false;
+            var lastBuffer = (typeof Player.lastBufferingMs === 'function') ? Player.lastBufferingMs() : 0;
+            var bufferingRecent = buffering || (lastBuffer && Date.now() - lastBuffer < 5000);
 
-            if (elapsed > 20000 && state !== 'PLAYING' && state !== 'PAUSED') {
+            if (elapsed > 20000 && state !== 'PLAYING' && state !== 'PAUSED' && !bufferingRecent) {
                 clearInterval(openWatchdog);
                 showError('Stuck loading after 20 s.  AVPlay state: ' + state +
                           '.  The codec, container, or source may not be supported.');
                 return;
             }
-            if (elapsed > 10000 && state === 'PLAYING' && (!time || time === 0)) {
+            if (elapsed > 10000 && state === 'PLAYING' && (!time || time === 0) && !bufferingRecent) {
                 clearInterval(openWatchdog);
                 showError('Playback stalled: AVPlay reports playing but the playhead ' +
-                          'isn\'t advancing.  This usually means the codec inside the ' +
-                          'file isn\'t supported by your TV (most often HEVC Main10 / ' +
-                          '10-bit colour on a TV that only handles HEVC Main8).');
+                          'isn\'t advancing, and no buffering events are coming in.  ' +
+                          'This usually means the codec inside the file isn\'t supported ' +
+                          'by your TV (most often HEVC Main10 / 10-bit colour on a TV ' +
+                          'that only handles HEVC Main8).');
                 return;
             }
             if (state === 'PLAYING' && time > 0) {

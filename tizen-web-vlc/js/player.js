@@ -432,6 +432,20 @@ var Player = (function () {
     var AV_STUCK_THRESHOLD = 10;    // 10 × 500ms = 5s of frozen PLAYING → bail
                                     // (was 8s; reduced since AVPlay tries every
                                     //  local file now, not just MKV)
+    /* Buffering state: AVPlay fires onbufferingstart when its read pipe
+     * underflows and onbufferingcomplete when it has enough data again.
+     * Tracking these lets the stuck-at-t=0 watchdog distinguish a real
+     * codec stall (no buffering events ever) from a slow source that's
+     * legitimately filling its buffer (buffering events keep arriving). */
+    var avBufferingActive = false;
+    var avLastBufferingMs = 0;
+    function avNoteBuffering(active) {
+        avBufferingActive  = !!active;
+        avLastBufferingMs  = Date.now();
+        if (active) avStuckChecks = 0;     // reset stall-counter
+    }
+    function isBuffering() { return avBufferingActive; }
+    function lastBufferingMs() { return avLastBufferingMs; }
     function avStartPolling(onFallback) {
         avStopPolling();
         avLastDebugT = 0; avLastDebugPos = 0; avStuckChecks = 0;
@@ -445,15 +459,21 @@ var Player = (function () {
                 var now = Date.now();
                 if (typeof Debug !== 'undefined' && now - avLastDebugT > 5000) {
                     var stuck = (s === 'PLAYING' && t === avLastDebugPos) ?
-                        ' (NOT ADVANCING — unsupported codec)' : '';
+                        (avBufferingActive ? ' (BUFFERING)' : ' (NOT ADVANCING — unsupported codec)') : '';
                     Debug.player('AV progress state=' + s + ' time=' + t + 'ms dur=' + d + 'ms' + stuck);
                     avLastDebugT = now; avLastDebugPos = t;
                 }
                 /* Watchdog: AVPlay sometimes reports PLAYING for a local
-                 * file but never actually decodes a frame.  After ~8s of
+                 * file but never actually decodes a frame.  After ~5 s of
                  * t==0 while state=PLAYING, give up and let the caller
-                 * fall back to the HTML5 backend. */
-                if (onFallback && !fallbackFired && s === 'PLAYING' && t === 0) {
+                 * fall back to the HTML5 backend.
+                 *
+                 * Skip the stall-counter when AVPlay is buffering or has
+                 * been buffering within the last 3 s — a slow source
+                 * legitimately stays at t=0 while filling the buffer and
+                 * we don't want to mis-blame it as a codec failure. */
+                var bufferingRecent = avBufferingActive || (now - avLastBufferingMs) < 3000;
+                if (onFallback && !fallbackFired && s === 'PLAYING' && t === 0 && !bufferingRecent) {
                     avStuckChecks++;
                     if (avStuckChecks >= AV_STUCK_THRESHOLD) {
                         fallbackFired = true;
@@ -462,7 +482,7 @@ var Player = (function () {
                         avStopPolling();
                         onFallback('no decode progress');
                     }
-                } else if (t > 0) {
+                } else if (t > 0 || bufferingRecent) {
                     avStuckChecks = 0;
                 }
             } catch (e) {}
@@ -509,8 +529,8 @@ var Player = (function () {
 
         try {
             av().setListener({
-                onbufferingstart:    function () { emit('onbuffering', true); },
-                onbufferingcomplete: function () { emit('onbuffering', false); },
+                onbufferingstart:    function () { avNoteBuffering(true);  emit('onbuffering', true);  },
+                onbufferingcomplete: function () { avNoteBuffering(false); emit('onbuffering', false); },
                 onstreamcompleted:   function () { emit('oncomplete'); },
                 onerror:             function (e) {
                     if (onFallback) { onFallback('runtime: ' + (e && e.message || e)); return; }
@@ -1469,6 +1489,8 @@ var Player = (function () {
         getTracks:          getTracks,
         setAudioTrack:      setAudioTrack,
         setSubtitleTrack:   setSubtitleTrack,
-        setDisplayRect:     setDisplayRect
+        setDisplayRect:     setDisplayRect,
+        isBuffering:        isBuffering,
+        lastBufferingMs:    lastBufferingMs
     };
 })();
