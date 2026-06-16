@@ -601,8 +601,27 @@
         // match for safety, but AVPlay DOES support the MKV container on these
         // TVs — a failure is a codec inside it, most often DTS/TrueHD audio.
         var isMkv = /^MKV_CODEC:/.test(msg) || /\.mkv($|\?)/i.test(uri) || /MKV not supported/i.test(msg);
+        // Legacy containers that AVPlay opens but rejects fast on codec grounds
+        // — DivX/Xvid AVI, WMV (VC-1/WMV9), FLV, old MPEG.  We see this as a
+        // sub-second "Unknown error" from AVPlay after a clean network/SMB
+        // transport.  No path forward in-app: TV's hardware decoder doesn't
+        // know these codecs.
+        var isLegacyContainer = /\.(avi|wmv|flv|rm|rmvb|mpe?g|vob|divx|asf)($|\?)/i.test(uri);
 
-        if (isMkv) {
+        if (isLegacyContainer) {
+            var ext = (uri.match(/\.([a-z0-9]+)(?:[?#]|$)/i) || [,''])[1].toLowerCase();
+            msg = 'This ' + ext.toUpperCase() + ' file can’t be played on this TV';
+            hint = 'The container opened but your TV’s hardware decoder doesn’t recognise ' +
+                   'the codec inside.  ' + ext.toUpperCase() + ' files from the late-90s / ' +
+                   '2000s usually carry DivX, Xvid, WMV9 or similar — Samsung TVs only decode ' +
+                   'H.264, HEVC and a handful of others natively.\n\n' +
+                   'Two ways to play these:\n' +
+                   '  1. Re-encode once with HandBrake or ffmpeg:\n' +
+                   '       ffmpeg -i input.' + ext + ' -c:v libx264 -preset fast ' +
+                   '-c:a aac -b:a 192k output.mp4\n' +
+                   '  2. Stream via Plex or Jellyfin — they transcode server-side to a ' +
+                   'codec your TV can decode, then VLC TV plays the transcoded HTTP stream.';
+        } else if (isMkv) {
             msg = 'This MKV couldn’t be played';
             hint = 'The MKV container itself is fine on this TV — the problem is a ' +
                    'track inside it.  Most often that’s DTS or TrueHD audio, which ' +
