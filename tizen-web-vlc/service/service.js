@@ -546,10 +546,28 @@ SmbConnection.prototype._sessionSetup = function (done) {
             // Signing key becomes available now; sign from the type3 request onward.
             self.signKey = t3.sessionKey;
         }
-        self._sessionSetupRequest(t3.token, function (status2) {
+        self._sessionSetupRequest(t3.token, function (status2, hdr2, resp2) {
             if (status2 !== ST.SUCCESS)
                 return done(new Error('Authentication failed 0x' + (status2 >>> 0).toString(16)));
-            log('SMB_AUTH_OK', { anonymous: self.anonymous });
+            /* MS-SMB2 §3.2.5.1.3: for SMB 2.1+ on a non-anonymous, non-guest
+             * session, the client SHOULD sign subsequent messages even when
+             * the server's NEGOTIATE response only set SIGNING_ENABLED (not
+             * SIGNING_REQUIRED).  Samba allows the first post-auth message
+             * unsigned and then closes the TCP socket on the second, which
+             * is exactly what we were seeing on AVI playback (first READ
+             * succeeds, second READ kills the connection with no response).
+             *
+             * Read SMB2_SESSION_FLAGS from the response: bit 0x01 = IS_GUEST,
+             * 0x02 = IS_NULL.  If neither is set and we have a session key,
+             * sign from here on. */
+            var sessionFlags = (resp2 && resp2.length >= 4) ? resp2.readUInt16LE(2) : 0;
+            var isGuestOrNull = !!(sessionFlags & 0x0003);
+            if (!self.anonymous && !isGuestOrNull && self.signKey) {
+                self.signing = true;
+            }
+            log('SMB_AUTH_OK', { anonymous: self.anonymous,
+                                  sessionFlags: '0x' + sessionFlags.toString(16),
+                                  signing: self.signing });
             done(null);
         });
     });
