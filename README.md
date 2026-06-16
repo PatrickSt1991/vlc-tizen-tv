@@ -112,6 +112,59 @@ The home screen has tap-to-fill chips for these:
 | MPEG-DASH | `https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd` |
 | RTSP (public) | `rtsp://170.93.143.139:554/rtplive/470011e600ef003a004ee33696235daa` |
 
+## Playing files the TV can't decode (old AVI / WMV / DTS / etc.)
+
+Samsung TVs only decode what's in their hardware decoder — typically
+**H.264, HEVC, VP9** for video and **AAC, MP3, AC-3, EAC-3** for audio.
+Old AVI / WMV / FLV files (DivX, Xvid, WMV9, etc.) and modern files
+with DTS-HD MA or TrueHD audio will fail in AVPlay's `prepareAsync`
+even when the network and proxy paths are fully working.
+
+VLC TV can't transcode on the TV itself (the CPU isn't fast enough),
+but the existing **Network Stream** view and the **Cast a link from
+your phone** flow already let you play streams that a *server* has
+transcoded for you. Two practical routes:
+
+### Stream through Plex or Jellyfin (no new setup if you already have one)
+
+Both expose every file in their library as a transcoded HTTP / HLS
+stream URL that this TV's AVPlay can decode natively. You just need to
+hand the URL to VLC TV.
+
+- **Plex**: in the web UI, right-click an item → *Get Info → View XML*,
+  or use the official API:
+  ```
+  http://<server>:32400/video/:/transcode/universal/start.m3u8?
+    path=<plex-id>&X-Plex-Token=<token>
+    &mediaIndex=0&directPlay=0&directStream=0
+    &videoResolution=1920x1080&audioBoost=100
+  ```
+- **Jellyfin**: in the web UI, *Play From Beginning → Play with Direct
+  Stream*, copy the URL from the dev tools network tab — looks like:
+  ```
+  http://<server>:8096/Videos/<item-id>/master.m3u8?
+    api_key=<key>&AudioCodec=aac&VideoCodec=h264
+  ```
+
+Once you have the URL, either type it in **Open Network Stream**, or
+paste it from your phone via **Get URL from device**.
+
+### One-shot re-encode with ffmpeg / HandBrake
+
+For files you'll keep on your USB drive or SMB share, a one-time
+re-encode to H.264 + AAC lasts forever:
+
+```bash
+ffmpeg -i input.avi -c:v libx264 -preset fast -c:a aac -b:a 192k output.mp4
+```
+
+For MKVs where only the audio is the problem (DTS, TrueHD), copy the
+video untouched and only re-encode audio — quick even on a Raspberry Pi:
+
+```bash
+ffmpeg -i input.mkv -c:v copy -c:a ac3 -b:a 640k output.mkv
+```
+
 ## Cast a link from your phone, tablet or laptop
 
 Typing URLs on a TV remote is painful, so VLC TV lets you paste a stream URL
