@@ -300,9 +300,11 @@ var SMB = (function () {
         wireSettingsForm();
 
     return {
-        openBrowser: openBrowser,
-        getCreds: getCreds,
-        setCreds: setCreds,
-        streamUrl: streamUrl
+        openBrowser:     openBrowser,
+        getCreds:        getCreds,
+        setCreds:        setCreds,
+        streamUrl:       streamUrl,
+        dumpServiceLogs: dumpServiceLogs,
+        isStreamUrl:     function (u) { return typeof u === 'string' && u.indexOf(BASE + '/smb/stream') === 0; }
     };
 })();

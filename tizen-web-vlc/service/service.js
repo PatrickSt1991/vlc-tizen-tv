@@ -774,87 +774,20 @@ function handleList(req, res, query) {
 
 var READ_CHUNK = 256 * 1024;   // per SMB2 READ; CreditCharge ≤ 4
 
-/* ──────────────────────────────────────────────────────────────────────────
- * SMB file-handle cache.
- *
- * AVPlay's HTTP client doesn't stream a single GET to the end of the file.
- * For containers with metadata at the file tail (AVI index, phone-camera
- * MP4 with moov-at-end) it opens the file, reads the first few KB, then
- * Range-requests the LAST few MB for the index, then jumps back to the
- * start — every step a separate HTTP request from AVPlay's POV.
- *
- * The original handler opened+closed the SMB file PER HTTP request, so
- * those scattered Ranges paid the full SMB CREATE+CLOSE round-trip each
- * time and playback stalled trying to fill the buffer.  Now we keep the
- * SMB file handle open across HTTP requests for the same path on the
- * same connection, with a short idle TTL so it gets reclaimed when
- * playback stops.
- *
- * Concurrency: SMB2 READ takes (fileId, offset, length) and our
- * SmbConnection demuxes responses by MessageId (see ctor comment), so
- * two simultaneous reads to the same fileId at different offsets are
- * safe — useful if AVPlay ever overlaps Range requests. */
-var OPEN_FILE_TTL_MS = 30000;
-var openFiles = {};   // 'connKey|path' → { conn, fileId, size, refCount, idleTimer, key }
-
-function fileKey(ck, p) { return ck + '|' + p; }
-
-function acquireOpenFile(creds, conn, path, cb) {
-    var ck = connKey(creds);
-    var key = fileKey(ck, path);
-    var entry = openFiles[key];
-    if (entry && entry.conn === conn && !conn.dead) {
-        if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
-        entry.refCount++;
-        log('SMB_OPEN_HIT', { path: path, refCount: entry.refCount });
-        return cb(null, entry);
-    }
-    // Stale entry (connection died, or different conn instance for same key)
-    if (entry) {
-        if (entry.idleTimer) clearTimeout(entry.idleTimer);
-        delete openFiles[key];
-    }
-    conn.open(path, false, function (err, file) {
-        if (err) return cb(err);
-        entry = {
-            conn:      conn,
-            fileId:    file.fileId,
-            size:      file.size,
-            refCount:  1,
-            idleTimer: null,
-            key:       key
-        };
-        openFiles[key] = entry;
-        log('SMB_OPEN_MISS', { path: path, size: file.size });
-        cb(null, entry);
-    });
-}
-
-function releaseOpenFile(entry) {
-    if (!entry || entry.refCount <= 0) return;
-    entry.refCount--;
-    if (entry.refCount > 0) return;
-    // Last reference released — arm TTL.  If a new Range arrives within
-    // the window, acquireOpenFile will cancel it and bump the refCount.
-    entry.idleTimer = setTimeout(function () {
-        if (openFiles[entry.key] !== entry) return;
-        delete openFiles[entry.key];
-        log('SMB_OPEN_TTL_EVICT', { key: entry.key });
-        try {
-            if (!entry.conn.dead) entry.conn.close(entry.fileId);
-        } catch (e) {}
-    }, OPEN_FILE_TTL_MS);
-}
+/* Reverted: SMB file-handle caching across HTTP Range requests broke
+ * AVPlay's prepareAsync on AVI inputs (failed with "Unknown error" ~11 s
+ * after av().open()).  Going back to the per-HTTP-request open/close
+ * pattern while we add service-side log surfacing so the next attempt
+ * can be diagnosed properly.  See task #12. */
 
 function handleStream(req, res, query) {
     if (!lastCreds) { cors(res, 409, 'text/plain'); return res.end('not connected'); }
     var path = query.path || '';
     getConn(lastCreds, function (err, c) {
         if (err) { cors(res, 502, 'text/plain'); return res.end(err.message); }
-        acquireOpenFile(lastCreds, c, path, function (e2, entry) {
+        c.open(path, false, function (e2, file) {
             if (e2) { cors(res, 404, 'text/plain'); return res.end(e2.message); }
-            var size   = entry.size;
-            var fileId = entry.fileId;
+            var size = file.size;
 
             // Parse Range: bytes=start-end
             var start = 0, end = size - 1, partial = false;
@@ -869,7 +802,7 @@ function handleStream(req, res, query) {
                 }
             }
             if (start > end || start >= size) {
-                releaseOpenFile(entry);
+                c.close(file.fileId);
                 cors(res, 416, 'text/plain', { 'Content-Range': 'bytes */' + size });
                 return res.end();
             }
@@ -882,24 +815,18 @@ function handleStream(req, res, query) {
             if (partial) headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + size;
             cors(res, partial ? 206 : 200, headers['Content-Type'], headers);
 
-            var pos = start, remaining = length, aborted = false, released = false;
-            function release() {
-                if (released) return;
-                released = true;
-                releaseOpenFile(entry);
-            }
-            req.on('close', function () { aborted = true; release(); });
+            var pos = start, remaining = length, aborted = false;
+            req.on('close', function () { aborted = true; });
 
             function pump() {
-                if (aborted) return;
-                if (remaining <= 0) { res.end(); release(); return; }
+                if (aborted || remaining <= 0) { c.close(file.fileId); if (!aborted) res.end(); return; }
                 // Never exceed the server's MaxReadSize, or a 2.0.2 server (64 KiB,
                 // single-credit) rejects the over-large multi-credit READ.
                 var want = Math.min(READ_CHUNK, c.maxRead, remaining);
-                c.read(fileId, pos, want, function (re, data) {
-                    if (aborted) { release(); return; }
-                    if (re)            { try { res.end(); } catch (e) {} release(); return; }
-                    if (!data.length)  { res.end(); release(); return; } // hit EOF early
+                c.read(file.fileId, pos, want, function (re, data) {
+                    if (aborted) { c.close(file.fileId); return; }
+                    if (re)            { c.close(file.fileId); try { res.end(); } catch (e) {} return; }
+                    if (!data.length)  { c.close(file.fileId); res.end(); return; } // hit EOF early
                     pos += data.length; remaining -= data.length;
                     var ok = res.write(data);
                     if (ok) pump();

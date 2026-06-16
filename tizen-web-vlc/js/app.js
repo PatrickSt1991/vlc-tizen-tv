@@ -130,6 +130,12 @@
             var text = typeof msg === 'string' ? msg
                        : (msg && msg.message ? msg.message : JSON.stringify(msg));
             if (typeof Debug !== 'undefined') Debug.error('player onerror: ' + text);
+            // If the failing URL is an SMB proxy stream, drain the service's
+            // ring-buffer log to the PC listener so we can diagnose what the
+            // proxy was doing when AVPlay gave up.
+            if (typeof SMB !== 'undefined' && SMB.isStreamUrl && SMB.isStreamUrl(state.playingUri)) {
+                try { SMB.dumpServiceLogs(); } catch (e) {}
+            }
             showError(text);
         });
         Player.setListener('onbuffering', function (active) {
