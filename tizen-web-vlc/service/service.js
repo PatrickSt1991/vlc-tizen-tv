@@ -164,6 +164,11 @@ var SMB2 = {
     TREE_CONNECT: 0x0003, TREE_DISCONNECT: 0x0004, CREATE: 0x0005,
     CLOSE: 0x0006, READ: 0x0008, QUERY_DIRECTORY: 0x000E
 };
+var SMB2_NAME = {
+    0x0000: 'NEGOTIATE', 0x0001: 'SESSION_SETUP', 0x0002: 'LOGOFF',
+    0x0003: 'TREE_CONNECT', 0x0004: 'TREE_DISCONNECT', 0x0005: 'CREATE',
+    0x0006: 'CLOSE', 0x0008: 'READ', 0x000E: 'QUERY_DIRECTORY'
+};
 var ST = {
     SUCCESS:               0x00000000,
     MORE_PROCESSING:       0xC0000016,
@@ -215,9 +220,14 @@ SmbConnection.prototype._frame = function () {
 SmbConnection.prototype._dispatch = function (msg) {
     if (msg.length < 64) return;
     var status = msg.readUInt32LE(8);
+    var cmd    = msg.readUInt16LE(12);
     var mid    = readU64LE(msg, 24);
+    var credit = msg.readUInt16LE(14);
     /* Async interim STATUS_PENDING: ignore, the real response follows. */
     if (status === ST.PENDING) return;
+    log('SMB_RECV', { cmd: SMB2_NAME[cmd] || ('0x' + cmd.toString(16)),
+                      mid: mid, status: '0x' + (status >>> 0).toString(16),
+                      credit: credit, bodyLen: msg.length - 64 });
     var cb = this.pending[mid];
     if (!cb) return;
     delete this.pending[mid];
@@ -227,7 +237,10 @@ SmbConnection.prototype._dispatch = function (msg) {
 SmbConnection.prototype._die = function (why) {
     if (this.dead) return;
     this.dead = true;
-    log('SMB_DEAD', why);
+    var pendingCmds = Object.keys(this.pending).length;
+    log('SMB_DEAD', { why: why,
+                      lastSent: SMB2_NAME[this.lastSentCmd] || ('0x' + (this.lastSentCmd || 0).toString(16)),
+                      pendingCount: pendingCmds });
     var p = this.pending; this.pending = {};
     for (var k in p) try { p[k](-1, null, null); } catch (e) {}
     try { if (this.socket) this.socket.destroy(); } catch (e) {}
@@ -267,6 +280,9 @@ SmbConnection.prototype._send = function (command, body, creditCharge, cb) {
         packet = Buffer.concat([hdr.buf, body]);
     }
     this.pending[hdr.id] = cb;
+    this.lastSentCmd = command;
+    log('SMB_SEND', { cmd: SMB2_NAME[command] || ('0x' + command.toString(16)),
+                      mid: hdr.id, charge: creditCharge, bodyLen: body.length });
     var pfx = Buffer.alloc(4);
     pfx[0] = 0;
     pfx[1] = (packet.length >> 16) & 0xFF;
