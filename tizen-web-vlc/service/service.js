@@ -248,16 +248,25 @@ SmbConnection.prototype._die = function (why) {
 
 /* Build a 64-byte SMB2 sync header. */
 SmbConnection.prototype._header = function (command, creditCharge) {
+    var charge = creditCharge || 1;
     var h = Buffer.alloc(64);
     h.writeUInt32BE(0xFE534D42, 0);         // 0xFE 'S' 'M' 'B'
     h.writeUInt16LE(64, 4);                  // StructureSize
-    h.writeUInt16LE(creditCharge || 1, 6);   // CreditCharge
+    h.writeUInt16LE(charge, 6);              // CreditCharge
     h.writeUInt32LE(0, 8);                    // Status (req: 0)
     h.writeUInt16LE(command, 12);
     h.writeUInt16LE(64, 14);                  // CreditRequest (ask generously)
     h.writeUInt32LE(0, 16);                   // Flags
     h.writeUInt32LE(0, 20);                   // NextCommand
-    var id = this.msgId++;
+    /* MS-SMB2 §3.2.4.1.5: a multi-credit request (CreditCharge > 1) consumes
+     * `charge` consecutive MessageIds.  The next request must skip past the
+     * reserved range; the server treats reuse of any reserved MessageId as a
+     * protocol violation and silently FINs the TCP connection (which is
+     * exactly the AVI failure mode reported by the tester -- first READ at
+     * mid=5 with charge=4 reserved [5..8], so mid=6 for the next READ
+     * collided and Samba closed us).  Always advance by charge, not by 1. */
+    var id = this.msgId;
+    this.msgId += charge;
     writeU64LE(h, 24, id);
     h.writeUInt32LE(0, 32);                   // Reserved
     h.writeUInt32LE(this.treeId >>> 0, 36);
