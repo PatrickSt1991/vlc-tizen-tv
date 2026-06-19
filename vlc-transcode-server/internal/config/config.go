@@ -7,6 +7,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,6 +35,12 @@ type Config struct {
 	// auto-detect.
 	Encoder string `json:"encoder,omitempty"`
 
+	// Token is a long random secret minted on first run. The TV receives it
+	// during pairing and sends it on /play, so a random LAN device can't drive
+	// the transcoder. It rides in URLs the TV builds automatically — no user
+	// friction.
+	Token string `json:"token,omitempty"`
+
 	path string     // backing file; not serialised
 	mu   sync.Mutex // guards Save against concurrent web writes
 }
@@ -40,6 +48,19 @@ type Config struct {
 // Configured reports whether enough is set to attempt an SMB connection.
 func (c *Config) Configured() bool {
 	return c.SMB.Host != "" && c.SMB.Share != ""
+}
+
+// EnsureToken mints the pairing secret on first run and persists it.
+func (c *Config) EnsureToken() error {
+	if c.Token != "" {
+		return nil
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return err
+	}
+	c.Token = hex.EncodeToString(b)
+	return c.Save()
 }
 
 // Load reads the config file, returning an empty (but usable) Config if it does

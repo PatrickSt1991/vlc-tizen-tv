@@ -33,6 +33,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	if err := cfg.EnsureToken(); err != nil {
+		log.Fatalf("token: %v", err)
+	}
 
 	// Auto-detect ffmpeg + the best available H.264 encoder.
 	caps, err := transcode.Probe(cfg.Encoder)

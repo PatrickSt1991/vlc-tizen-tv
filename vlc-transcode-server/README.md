@@ -29,19 +29,32 @@ Then open **`http://<box-ip>:8200`** in any browser and fill in your SMB share
 (host, share name, username/password — or toggle Guest). Use **Test connection**
 and **Browse share** to confirm it can see your files.
 
-That's the whole setup. (Pairing with the TV app comes in a later step; for now
-you can verify transcoding directly — see below.)
+## Pair with the TV
+
+On the TV: **Settings → Transcode server → Pair**, then enter the code the TV
+shows into the **Pair with TV** box on this page. The server publishes its LAN
+address + a token to the TV (via the same ntfy pairing channel the app already
+uses), and the TV stores it.
+
+From then on the TV browses your SMB share exactly as before — but when you press
+play, the file streams through this box, transcoded as needed. Nothing else in
+the TV's flow changes; if the server is ever unpaired or offline the TV falls
+back to playing directly.
+
+> The server must point at the **same share** the TV browses, so the relative
+> paths line up.
 
 ## Verify transcoding (before the TV is involved)
 
-Point VLC on a laptop at a file via the server:
+The setup page shows a ready-made **Test transcoding** link (it includes the
+token). Open it in VLC on a laptop, swapping in a real file path:
 
 ```
-http://<box-ip>:8200/play?path=/Movies/SomeMovie.mkv
+http://<box-ip>:8200/play?path=/Movies/SomeMovie.mkv&token=<token>
 ```
 
 The server probes the file, decides remux-vs-transcode, starts ffmpeg, and
-redirects to the HLS playlist. A DTS/TrueHD file should now play **with sound**.
+serves the live HLS manifest. A DTS/TrueHD file should now play **with sound**.
 
 ## How it decides
 

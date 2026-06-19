@@ -21,8 +21,30 @@ async function loadStatus() {
     $('st-enc').textContent = s.encoder || '—';
     $('st-hw').textContent = s.hwaccel === 'none' ? 'software' : (s.hwaccel || '—');
     $('st-share').textContent = s.configured ? s.share : 'not configured';
+    $('st-url').textContent = s.serverURL || '—';
     $('hdot').style.background = s.configured ? 'var(--ok)' : 'var(--mut)';
+    if (s.configured && s.serverURL && s.token) {
+      $('testcard').style.display = '';
+      $('testlink').textContent = s.serverURL + '/play?path=/Movies/YourFile.mkv&token=' + s.token;
+    }
   } catch (e) { /* server starting */ }
+}
+
+async function pair() {
+  const code = $('code').value.trim();
+  if (!code) { $('pairmsg').textContent = 'Enter the code shown on the TV.'; $('pairmsg').className = 'msg err'; return; }
+  $('pairmsg').textContent = 'Pairing…'; $('pairmsg').className = 'msg';
+  const res = await (await fetch('/api/pair', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  })).json();
+  if (res.ok) {
+    $('pairmsg').textContent = 'Sent ' + res.url + ' to the TV. Press “Pair” on the TV to finish.';
+    $('pairmsg').className = 'msg ok';
+  } else {
+    $('pairmsg').textContent = 'Pairing failed: ' + (res.error || 'unknown');
+    $('pairmsg').className = 'msg err';
+  }
 }
 
 async function loadConfig() {
@@ -98,6 +120,7 @@ $('anon').onclick = () => { anon = !anon; paintAnon(); };
 $('save').onclick = save;
 $('test').onclick = test;
 $('browse').onclick = async () => { await save(); browse(''); };
+$('pair').onclick = pair;
 
 loadConfig();
 loadStatus();

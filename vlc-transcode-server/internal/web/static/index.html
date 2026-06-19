@@ -43,6 +43,7 @@
     <div class="kv"><span>Encoder</span><span class="pill" id="st-enc">…</span></div>
     <div class="kv"><span>Hardware accel</span><span class="pill" id="st-hw">…</span></div>
     <div class="kv"><span>Share</span><span id="st-share">…</span></div>
+    <div class="kv"><span>This server</span><span id="st-url">…</span></div>
   </div>
 
   <div class="card">
@@ -70,6 +71,22 @@
     </div>
     <div class="msg" id="msg"></div>
     <ul id="list" style="list-style:none;padding:0;margin:12px 0 0;font-size:13px;"></ul>
+  </div>
+
+  <div class="card">
+    <h2>Pair with TV</h2>
+    <p class="sub" style="margin:0 0 10px">On the TV: <b>Settings → Transcode server → Pair</b>. Enter the code it shows here.</p>
+    <div class="row">
+      <div><label>TV pairing code</label><input type="text" id="code" placeholder="e.g. 7gk2p9qx1m"></div>
+      <div style="flex:0 0 auto;display:flex;align-items:flex-end"><button class="primary" id="pair">Pair</button></div>
+    </div>
+    <div class="msg" id="pairmsg"></div>
+  </div>
+
+  <div class="card" id="testcard" style="display:none">
+    <h2>Test transcoding</h2>
+    <p class="sub" style="margin:0 0 8px">Open this in VLC on a laptop to confirm a file plays (replace the path):</p>
+    <code id="testlink" style="display:block;word-break:break-all;background:#0e1117;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;color:var(--acc)"></code>
   </div>
 </div>
 <script src="app.js"></script>

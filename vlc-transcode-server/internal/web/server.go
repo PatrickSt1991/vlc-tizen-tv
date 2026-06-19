@@ -11,12 +11,13 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PatrickSt1991/vlc-tizen-tv/vlc-transcode-server/internal/config"
+	"github.com/PatrickSt1991/vlc-tizen-tv/vlc-transcode-server/internal/pair"
 	"github.com/PatrickSt1991/vlc-tizen-tv/vlc-transcode-server/internal/smb"
 	"github.com/PatrickSt1991/vlc-tizen-tv/vlc-transcode-server/internal/transcode"
 )
@@ -60,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/test", s.handleTest)
 	mux.HandleFunc("/api/browse", s.handleBrowse)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/pair", s.handlePair)
 
 	// Media plane.
 	mux.HandleFunc("/raw", s.handleRaw)   // ffmpeg input (localhost only)
@@ -89,9 +91,17 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filepath.Base(p), time.Time{}, f.File)
 }
 
-// handlePlay ensures a transcode session exists, then redirects the player to
-// its HLS playlist. This is the URL the TV ultimately hands to AVPlay.
+// handlePlay is the URL the TV hands to AVPlay. It ensures a transcode session,
+// then serves that session's live HLS manifest *directly* (rewriting segment
+// names to absolute /hls/<id>/ paths). Serving the manifest here — rather than
+// 302-redirecting — means we don't depend on AVPlay following redirects, and
+// AVPlay's periodic manifest re-fetch (live/event playlist) simply re-hits this
+// handler, which returns the current segment list as ffmpeg extends it.
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
+	if !s.checkToken(r) {
+		http.Error(w, "unauthorized — pair the TV first", http.StatusForbidden)
+		return
+	}
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		http.Error(w, "missing path", http.StatusBadRequest)
@@ -106,7 +116,37 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "transcode failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	http.Redirect(w, r, "/hls/"+sess.ID+"/index.m3u8", http.StatusFound)
+
+	raw, err := os.ReadFile(filepath.Join(sess.Dir, "index.m3u8"))
+	if err != nil {
+		http.Error(w, "playlist not ready", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(rewriteManifest(raw, "/hls/"+sess.ID+"/"))
+}
+
+// rewriteManifest prefixes bare segment filenames with the absolute HLS path so
+// they resolve regardless of the manifest's own URL.
+func rewriteManifest(m3u8 []byte, prefix string) []byte {
+	lines := strings.Split(string(m3u8), "\n")
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue // comment/tag or blank — leave untouched
+		}
+		lines[i] = prefix + t // a segment (or sub-playlist) reference
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// checkToken enforces the pairing secret. A request is allowed when no token is
+// configured (shouldn't happen — EnsureToken runs at startup) or the supplied
+// token matches.
+func (s *Server) checkToken(r *http.Request) bool {
+	want := s.cfg.Token
+	return want == "" || r.URL.Query().Get("token") == want
 }
 
 // handleHLS serves the playlist and segments from a session's working dir.
@@ -192,7 +232,31 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"encoder":    caps.VideoEncoder,
 		"hwaccel":    caps.HWAccel,
 		"share":      s.cfg.SMB.Host + "/" + s.cfg.SMB.Share,
+		"token":      s.cfg.Token, // LAN-trusted UI; used to build the test link
+		"serverURL":  pair.LocalURL(s.port),
 	})
+}
+
+// handlePair publishes this server's LAN URL + token to the TV's pairing topic.
+// The user enters the code shown on the TV; the TV then pulls the announcement.
+func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	url := pair.LocalURL(s.port)
+	if err := pair.Publish(r.Context(), in.Code, url, s.cfg.Token); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "url": url})
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -223,6 +287,3 @@ func urlEscape(s string) string {
 	r := strings.NewReplacer(" ", "%20", "?", "%3F", "#", "%23", "&", "%26", "+", "%2B")
 	return r.Replace(s)
 }
-
-// for the status page formatting of durations if needed later.
-var _ = strconv.Itoa
