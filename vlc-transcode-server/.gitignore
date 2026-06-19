@@ -1,0 +1,5 @@
+# persisted runtime config + transcode scratch
+/data/
+# local build artefacts
+/vlc-transcode
+*.test
