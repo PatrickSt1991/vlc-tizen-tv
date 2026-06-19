@@ -219,6 +219,13 @@
             <button id="smb-save" class="settings-row"><span class="settings-label">Save SMB server</span></button>
         </div>
 
+        <h2 class="settings-section-title">Transcode server</h2>
+        <div class="settings-group">
+            <div class="settings-row"><div class="settings-label">Status</div><div class="settings-value" id="srv-status-val">Not paired</div></div>
+            <button id="srv-pair" class="settings-row" data-focus><span class="settings-label">Pair transcode server</span></button>
+            <button id="srv-unpair" class="settings-row"><span class="settings-label">Remove transcode server</span></button>
+        </div>
+
         <h2 class="settings-section-title">Subtitle appearance</h2>
         <div class="settings-group">
             <button class="settings-row" data-action="setting-subtitle-size">
@@ -284,6 +291,7 @@
 <script src="js/player.js"></script>
 <script src="js/qrcode.js"></script>
 <script src="js/url-drop.js"></script>
+<script src="js/server.js"></script>
 <script src="js/smb.js"></script>
 <script src="js/app.js"></script>
 </body>
