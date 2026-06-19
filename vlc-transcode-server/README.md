@@ -17,13 +17,25 @@ hands the TV an HLS URL it *can* play.
 
 ## Run it
 
-You need Docker on the box. The image bundles ffmpeg — nothing else to install.
+You need Docker on the box. The image bundles ffmpeg — nothing else to install,
+nothing to clone or build.
+
+**One-liner:**
 
 ```bash
-git clone https://github.com/PatrickSt1991/vlc-tizen-tv.git
-cd vlc-tizen-tv/vlc-transcode-server
+docker run -d --name vlc-transcode --restart unless-stopped \
+  -p 8200:8200 -v "$PWD/vlc-data:/data" --device /dev/dri \
+  ghcr.io/patrickst1991/vlc-transcode:latest
+```
+
+**Or with Compose** (grab `docker-compose.yml` from this folder):
+
+```bash
 docker compose up -d
 ```
+
+(`--device /dev/dri` exposes the hardware encoder; it's harmless if the box
+doesn't have one — the server falls back to software.)
 
 Then open **`http://<box-ip>:8200`** in any browser and fill in your SMB share
 (host, share name, username/password — or toggle Guest). Use **Test connection**

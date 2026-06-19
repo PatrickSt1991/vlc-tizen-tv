@@ -1,12 +1,16 @@
 # ── build stage ──────────────────────────────────────────────────────────────
-# Pure-Go (go-smb2 needs no cgo), so we can produce a fully static binary that
-# drops into any final image regardless of libc.
-FROM golang:1.23-bookworm AS build
+# Pure-Go (go-smb2 needs no cgo), so we cross-compile a fully static binary for
+# the target arch on the native build arch — no QEMU emulation for the Go step,
+# which keeps multi-arch builds fast.
+FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /vlc-transcode .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /vlc-transcode .
 
 # ── runtime stage ────────────────────────────────────────────────────────────
 # Debian's ffmpeg covers software (libx264), VAAPI (Intel/AMD), V4L2 M2M and
