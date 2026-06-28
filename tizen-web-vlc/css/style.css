@@ -720,6 +720,53 @@ button:focus { outline: none; }
     font-weight: 500;
 }
 
+/* Collapsible section header — looks like the bare h2 above, but is a
+ * focusable button so D-pad navigation can expand the group on press.
+ * Sections containing text-input rows (SMB, Debug logging) are collapsed
+ * by default so passing them with the D-pad doesn't pop the on-screen
+ * keyboard for every input on the way past — that was the trigger for
+ * the lag / crash described in issue #28. */
+.settings-section-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    margin: 20px 0 16px;
+    background: transparent;
+    border: 2px solid transparent;
+    border-radius: var(--r);
+    color: var(--fg-mute);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.settings-section-toggle .settings-section-title { margin: 0; }
+.settings-section-toggle:focus,
+.settings-section-toggle.focused {
+    border-color: var(--accent);
+    background: var(--bg-card);
+    color: var(--fg);
+    outline: none;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.settings-section-chev {
+    font-size: 20px;
+    color: var(--fg-dim);
+    transition: transform .15s ease;
+    margin-left: 16px;
+}
+/* Expanded state (default rendering of an open <button aria-expanded="true">) */
+.settings-section-toggle[aria-expanded="true"] .settings-section-chev {
+    transform: rotate(90deg);
+}
+
+/* Hide the collapsed group entirely.  display:none means descendants have
+ * offsetParent === null, which the UI focus filter (ui.js:48) treats as
+ * non-focusable — exactly what we want, the keyboard never gets a chance
+ * to pop for hidden inputs. */
+.settings-group.is-collapsed { display: none; }
+
 /* TV info table */
 .tvinfo {
     background: var(--bg-card);
