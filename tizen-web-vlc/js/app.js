@@ -615,12 +615,19 @@
                    'the codec inside.  ' + ext.toUpperCase() + ' files from the late-90s / ' +
                    '2000s usually carry DivX, Xvid, WMV9 or similar — Samsung TVs only decode ' +
                    'H.264, HEVC and a handful of others natively.\n\n' +
-                   'Two ways to play these:\n' +
-                   '  1. Re-encode once with HandBrake or ffmpeg:\n' +
+                   'Three ways to play these:\n' +
+                   '  1. Set up the companion VLC TV transcode server (recommended for ' +
+                   'SMB shares): a small Go binary you run once on a Linux box, Windows ' +
+                   'PC, Mac mini, NAS or Proxmox VM.  Pair it from Settings → Transcode ' +
+                   'server, and from then on every file streams through it — TV-incompatible ' +
+                   'codecs get transcoded on the fly, everything else passes through ' +
+                   'untouched.  See github.com/PatrickSt1991/vlc-tizen-tv/releases ' +
+                   '(transcode-v* assets).\n' +
+                   '  2. Stream via Plex or Jellyfin if you already run one — they transcode ' +
+                   'server-side too, just hand the URL to Open Network Stream.\n' +
+                   '  3. Re-encode once with HandBrake or ffmpeg:\n' +
                    '       ffmpeg -i input.' + ext + ' -c:v libx264 -preset fast ' +
-                   '-c:a aac -b:a 192k output.mp4\n' +
-                   '  2. Stream via Plex or Jellyfin — they transcode server-side to a ' +
-                   'codec your TV can decode, then VLC TV plays the transcoded HTTP stream.';
+                   '-c:a aac -b:a 192k output.mp4';
         } else if (isMkv) {
             msg = 'This MKV couldn’t be played';
             hint = 'The MKV container itself is fine on this TV — the problem is a ' +
@@ -630,11 +637,13 @@
                    'Try, in order:\n' +
                    '  1. Open the CC / track menu and pick another audio track (many ' +
                    'releases include an AC3 or AAC track alongside the DTS one).\n' +
-                   '  2. Re-encode just the audio (keeps the video untouched, fast even ' +
-                   'on a Raspberry Pi):\n' +
-                   '       ffmpeg -i input.mkv -c:v copy -c:a ac3 -b:a 640k output.mkv\n' +
-                   '  3. If the video also won’t play, remux/transcode the whole file:\n' +
-                   '       ffmpeg -i input.mkv -c:v copy -c:a aac -b:a 192k output.mp4';
+                   '  2. Set up the companion VLC TV transcode server: a small Go binary ' +
+                   'on any Linux box, Windows PC, Mac mini, NAS or Proxmox VM.  Pair from ' +
+                   'Settings → Transcode server; from then on TV-incompatible audio gets ' +
+                   'remuxed to AC3/AAC on the fly, video copied untouched.  See ' +
+                   'github.com/PatrickSt1991/vlc-tizen-tv/releases (transcode-v* assets).\n' +
+                   '  3. Re-encode just the audio yourself (fast even on a Pi):\n' +
+                   '       ffmpeg -i input.mkv -c:v copy -c:a ac3 -b:a 640k output.mkv';
         } else if (/unknown error|not supported|invalid|stuck loading|unsupported source/i.test(msg)) {
             hint = 'The file or stream may use a codec or container that this TV can\'t ' +
                    'decode (HEVC 10-bit, AV1, DTS-HD MA, VP9 Profile 2, etc.). ' +
