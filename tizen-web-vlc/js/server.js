@@ -1,5 +1,5 @@
 /* server.js — pairing with, and routing playback through, the optional
- * vlc-transcode-server companion (runs on the user's AM6b+ box).
+ * vlc-tv-transcode companion (runs on the user's AM6b+ box).
  *
  * The idea: SMB browsing on the TV stays exactly as it is. The ONLY thing that
  * changes is where the bytes come from when you press play. If a transcode
@@ -89,7 +89,13 @@ var TranscodeServer = (function () {
         if (!latest) return null;
         try {
             var ann = JSON.parse(latest);
-            if (ann && ann.type === 'vlc-transcode-server' && ann.url) return ann;
+            // Wire-type bumped from "vlc-transcode-server" → "vlc-tv-transcode-server"
+            // alongside the binary rename.  Accept both for one release cycle so
+            // users still paired with an older server keep working after the TV
+            // app upgrades; can drop the legacy alias next stable.
+            if (ann && ann.url &&
+                (ann.type === 'vlc-tv-transcode-server' || ann.type === 'vlc-transcode-server'))
+                return ann;
         } catch (e) {}
         return null;
     }

@@ -16,7 +16,7 @@ permissions:
 
 env:
   # ghcr requires a lowercase image path.
-  IMAGE: ghcr.io/patrickst1991/vlc-transcode
+  IMAGE: ghcr.io/patrickst1991/vlc-tv-transcode
 
 jobs:
   build:

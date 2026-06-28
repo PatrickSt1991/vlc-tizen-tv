@@ -1,13 +1,13 @@
 # Drop this on the AM6b+ and run:  docker compose up -d
 # Then open  http://<box-ip>:8200  to enter your SMB share details.
 services:
-  vlc-transcode:
+  vlc-tv-transcode:
     # Pulls the prebuilt multi-arch image — no cloning or building needed.
-    image: ghcr.io/patrickst1991/vlc-transcode:latest
+    image: ghcr.io/patrickst1991/vlc-tv-transcode:latest
     # Developers building from source instead: comment the line above and
     # uncomment the next one (run from this directory).
     # build: .
-    container_name: vlc-transcode
+    container_name: vlc-tv-transcode
     restart: unless-stopped
     ports:
       - "8200:8200"

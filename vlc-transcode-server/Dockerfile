@@ -10,7 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /vlc-transcode .
+    go build -trimpath -ldflags="-s -w" -o /vlc-tv-transcode .
 
 # ── runtime stage ────────────────────────────────────────────────────────────
 # Debian's ffmpeg covers software (libx264), VAAPI (Intel/AMD), V4L2 M2M and
@@ -24,12 +24,12 @@ RUN apt-get update \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /vlc-transcode /usr/local/bin/vlc-transcode
+COPY --from=build /vlc-tv-transcode /usr/local/bin/vlc-tv-transcode
 
 ENV DATA_DIR=/data \
-    WORK_DIR=/tmp/vlc-transcode \
+    WORK_DIR=/tmp/vlc-tv-transcode \
     PORT=8200
 VOLUME /data
 EXPOSE 8200
 
-ENTRYPOINT ["/usr/local/bin/vlc-transcode"]
+ENTRYPOINT ["/usr/local/bin/vlc-tv-transcode"]

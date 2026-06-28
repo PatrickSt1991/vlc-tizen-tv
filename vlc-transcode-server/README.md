@@ -1,4 +1,4 @@
-# VLC Transcode Server
+# VLC TV Transcode Server
 
 A tiny self-hosted companion for the [VLC Tizen TV app](../). It runs on a small
 always-on box (e.g. an AM6b+), reads your media from an **SMB share**, and
@@ -23,9 +23,9 @@ nothing to clone or build.
 **One-liner:**
 
 ```bash
-docker run -d --name vlc-transcode --restart unless-stopped \
+docker run -d --name vlc-tv-transcode --restart unless-stopped \
   -p 8200:8200 -v "$PWD/vlc-data:/data" --device /dev/dri \
-  ghcr.io/patrickst1991/vlc-transcode:latest
+  ghcr.io/patrickst1991/vlc-tv-transcode:latest
 ```
 
 **Or with Compose** (grab `docker-compose.yml` from this folder):
@@ -55,13 +55,13 @@ under the latest `transcode-v*` tag:
 
 | OS | Asset | Bundled ffmpeg? |
 |---|---|---|
-| Windows x64 | `vlc-transcode-windows-amd64.zip` | ✅ included (BtbN GPL build) |
-| Linux x64 | `vlc-transcode-linux-amd64.zip` | ✅ included (BtbN GPL build) |
-| Linux ARM64 (Raspberry Pi 4/5, generic ARM) | `vlc-transcode-linux-arm64.zip` | ✅ included |
-| macOS Apple Silicon | `vlc-transcode-darwin-arm64.zip` | ❌ run `brew install ffmpeg` |
-| macOS Intel | `vlc-transcode-darwin-amd64.zip` | ❌ run `brew install ffmpeg` |
+| Windows x64 | `vlc-tv-transcode-windows-amd64.zip` | ✅ included (BtbN GPL build) |
+| Linux x64 | `vlc-tv-transcode-linux-amd64.zip` | ✅ included (BtbN GPL build) |
+| Linux ARM64 (Raspberry Pi 4/5, generic ARM) | `vlc-tv-transcode-linux-arm64.zip` | ✅ included |
+| macOS Apple Silicon | `vlc-tv-transcode-darwin-arm64.zip` | ❌ run `brew install ffmpeg` |
+| macOS Intel | `vlc-tv-transcode-darwin-amd64.zip` | ❌ run `brew install ffmpeg` |
 
-Unzip anywhere. On Windows + Linux that gets you `vlc-transcode(.exe)` plus
+Unzip anywhere. On Windows + Linux that gets you `vlc-tv-transcode(.exe)` plus
 `ffmpeg(.exe)` and `ffprobe(.exe)` in the same folder — the server picks them
 up automatically (the binary prepends its own directory to `PATH` at
 startup), so there's nothing to install. On macOS, `brew install ffmpeg` once
@@ -73,11 +73,11 @@ directory (where the config + pairing token live):
 
 ```bash
 # Linux / macOS
-DATA_DIR=./vlc-data ./vlc-transcode
+DATA_DIR=./vlc-data ./vlc-tv-transcode
 
 # Windows (cmd.exe / PowerShell)
 set DATA_DIR=%CD%\vlc-data
-vlc-transcode.exe
+vlc-tv-transcode.exe
 ```
 
 If you'd rather use a different port, set `PORT=8201` (etc.) in the same
@@ -93,7 +93,7 @@ listening on :8200
 
 If it instead exits with `ffmpeg not found — install ffmpeg`, your `ffmpeg`
 isn't on `PATH`. Either install it (see the table above) or put `ffmpeg(.exe)`
-and `ffprobe(.exe)` in the same folder as `vlc-transcode(.exe)`.
+and `ffprobe(.exe)` in the same folder as `vlc-tv-transcode(.exe)`.
 
 Then open `http://<this-machine's-LAN-IP>:8200` and continue with [Pair with the
 TV](#pair-with-the-tv) below.
@@ -169,7 +169,7 @@ ffmpeg reports and falls back to software (`libx264`). Detection order:
 |---|---|---|
 | `PORT` | `8200` | HTTP port |
 | `DATA_DIR` | `/data` | where `config.json` is persisted |
-| `WORK_DIR` | `/tmp/vlc-transcode` | scratch for HLS segments |
+| `WORK_DIR` | `/tmp/vlc-tv-transcode` | scratch for HLS segments |
 
 ## Known limitations (Phase 1)
 
