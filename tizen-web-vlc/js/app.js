@@ -960,9 +960,14 @@
         var osdVisible = !document.getElementById('osd-bottom').classList.contains('hidden');
 
         switch (code) {
-            // All four arrows in player view navigate between OSD buttons.
-            // Seek is on the dedicated FF / RW media keys instead, so arrows
-            // don't fight navigation with seeking.
+            // Player view key mapping (issue #28 part 2):
+            //   Up/Down  → cycle between OSD buttons (no-op when OSD hidden,
+            //              just brings it up)
+            //   Left     → seek backward 10 s, keep OSD up
+            //   Right    → seek forward  10 s, keep OSD up
+            //   FF/RW    → still ±30 s on dedicated media keys
+            // The 10 s step matches YouTube-on-TV's D-pad scrubbing rate and
+            // is fine-grained enough that users don't overshoot a few seconds.
             case K.UP:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
                     if (!osdVisible) { flashOSD(); return true; }
@@ -991,16 +996,14 @@
                 return true;
             case K.LEFT:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
-                    if (!osdVisible) { flashOSD(); return true; }
-                    UI.moveFocusCyclic(-1);    // previous OSD button
-                    flashOSD();
+                    Player.seekRel(-10000);
+                    flashOSD();   // keeps the OSD up while scrubbing
                     return true;
                 }
                 UI.moveFocus('left');  return true;
             case K.RIGHT:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
-                    if (!osdVisible) { flashOSD(); return true; }
-                    UI.moveFocusCyclic(+1);    // next OSD button
+                    Player.seekRel(+10000);
                     flashOSD();
                     return true;
                 }
