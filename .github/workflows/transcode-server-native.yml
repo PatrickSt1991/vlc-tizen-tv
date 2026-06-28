@@ -17,17 +17,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Native installs for users who don't want Docker. Same Go source as
-          # the container image; ffmpeg is expected to be on PATH (Linux/macOS
-          # via the system package manager, Windows via gyan.dev or BtbN — see
-          # vlc-transcode-server/README.md).
+          # Native installs for users who don't want Docker.  Same Go source
+          # as the container image.  Windows + Linux bundles ALSO ship
+          # ffmpeg + ffprobe (BtbN's GPL-licensed builds) so users can
+          # double-click and go — no separate install step.  macOS bundles
+          # don't (BtbN doesn't publish macOS, and brew install ffmpeg is
+          # the universal-correct answer on Mac anyway).
           - goos: linux
             goarch: amd64
+            ffmpeg_url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz'
+            ffmpeg_archive: tar.xz
           - goos: linux
             goarch: arm64
+            ffmpeg_url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz'
+            ffmpeg_archive: tar.xz
           - goos: windows
             goarch: amd64
             ext: '.exe'
+            ffmpeg_url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+            ffmpeg_archive: zip
           - goos: darwin
             goarch: amd64
           - goos: darwin
@@ -54,7 +62,24 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o "$OUT" .
           ls -la "$OUT"
 
-      - name: Bundle (binary + README)
+      - name: Fetch + extract bundled ffmpeg (Linux / Windows only)
+        if: matrix.ffmpeg_url != ''
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ff"
+          cd "$RUNNER_TEMP/ff"
+          curl -fL --retry 3 -o ffmpeg-bundle.${{ matrix.ffmpeg_archive }} "${{ matrix.ffmpeg_url }}"
+          if [ "${{ matrix.ffmpeg_archive }}" = "zip" ]; then
+            unzip -q ffmpeg-bundle.zip
+          else
+            tar -xf ffmpeg-bundle.tar.xz
+          fi
+          # BtbN archives extract to a single ffmpeg-master-latest-<plat>-gpl/
+          # directory with binaries in bin/ and licenses at the top level.
+          ROOT=$(find . -mindepth 1 -maxdepth 1 -type d | head -n1)
+          ls "$ROOT/bin"
+
+      - name: Bundle (binary + README + bundled ffmpeg if any)
         working-directory: vlc-transcode-server
         run: |
           set -euo pipefail
@@ -62,6 +87,21 @@ jobs:
           mkdir -p "$BUNDLE"
           cp "vlc-transcode${{ matrix.ext }}" "$BUNDLE/"
           cp README.md "$BUNDLE/"
+
+          # If this matrix entry bundles ffmpeg, copy ffmpeg + ffprobe alongside
+          # the binary and pull in the GPL license text so we're square with
+          # FFmpeg's licensing.
+          if [ -n "${{ matrix.ffmpeg_url }}" ]; then
+            ROOT=$(find "$RUNNER_TEMP/ff" -mindepth 1 -maxdepth 1 -type d | head -n1)
+            cp "$ROOT/bin/ffmpeg${{ matrix.ext }}"  "$BUNDLE/"
+            cp "$ROOT/bin/ffprobe${{ matrix.ext }}" "$BUNDLE/"
+            # BtbN ships its build's LICENSE.txt at the archive root; preserve
+            # it so the GPL attribution travels with the binary.
+            if [ -f "$ROOT/LICENSE.txt" ]; then
+              cp "$ROOT/LICENSE.txt" "$BUNDLE/FFMPEG_LICENSE.txt"
+            fi
+          fi
+
           mkdir -p "$GITHUB_WORKSPACE/dist"
           ZIP="$GITHUB_WORKSPACE/dist/vlc-transcode-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
           ( cd "$BUNDLE" && zip -r "$ZIP" . )
