@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // SMB holds the connection details for the one share we read media from.
@@ -24,6 +25,17 @@ type SMB struct {
 	Pass      string `json:"pass"`      // empty when Anonymous
 	Domain    string `json:"domain"`    // usually empty
 	Anonymous bool   `json:"anonymous"` // guest/null session
+}
+
+// LastPair records the most recent successful ntfy publish, so the web UI can
+// reassure the user across server restarts that pairing isn't forgotten — the
+// SMB form auto-fills from the persisted config but the TV's code isn't
+// recoverable from anywhere, which made it feel like the server "forgets"
+// after every upgrade.  Knowing the last code + time published is enough to
+// confirm the TV-side token is still valid.
+type LastPair struct {
+	Code string    `json:"code"` // the TV's pairing code we published to
+	At   time.Time `json:"at"`   // when the publish succeeded
 }
 
 // Config is the whole persisted document.
@@ -40,6 +52,11 @@ type Config struct {
 	// the transcoder. It rides in URLs the TV builds automatically — no user
 	// friction.
 	Token string `json:"token,omitempty"`
+
+	// LastPair is the most recent successful publish to ntfy — surfaced in the
+	// web UI as "Last paired with code XYZ at HH:MM".  Nil until the first
+	// successful Pair button click on the web UI.
+	LastPair *LastPair `json:"last_pair,omitempty"`
 
 	path string     // backing file; not serialised
 	mu   sync.Mutex // guards Save against concurrent web writes

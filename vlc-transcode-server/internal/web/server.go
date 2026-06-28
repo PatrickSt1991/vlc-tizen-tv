@@ -234,6 +234,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"share":      s.cfg.SMB.Host + "/" + s.cfg.SMB.Share,
 		"token":      s.cfg.Token, // LAN-trusted UI; used to build the test link
 		"serverURL":  pair.LocalURL(s.port),
+		"lastPair":   s.cfg.LastPair, // nil until the first successful pair publish
 	})
 }
 
@@ -255,6 +256,14 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if err := pair.Publish(r.Context(), in.Code, url, s.cfg.Token); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
+	}
+	// Remember this for the web UI so the next visit (or the next binary
+	// upgrade) shows "last paired with code X at HH:MM" rather than feeling
+	// like the server has amnesia.  Failures to save are non-fatal — the
+	// pair publish already succeeded, so the TV side is good.
+	s.cfg.LastPair = &config.LastPair{Code: in.Code, At: time.Now().UTC()}
+	if err := s.cfg.Save(); err != nil {
+		log.Printf("warning: pair succeeded but persisting LastPair failed: %v", err)
 	}
 	writeJSON(w, map[string]any{"ok": true, "url": url})
 }

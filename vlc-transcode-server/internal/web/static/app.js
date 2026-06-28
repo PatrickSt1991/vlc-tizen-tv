@@ -15,6 +15,27 @@ function paintAnon() {
   $('creds').style.opacity = anon ? .4 : 1;
 }
 
+// Format a UTC ISO timestamp as "just now / N min ago / today at HH:MM /
+// YYYY-MM-DD HH:MM" depending on how recent it is.  Keeps the "last paired"
+// line readable without bringing in a date library.
+function formatAgo(iso) {
+  if (!iso) return '';
+  const t = new Date(iso);
+  if (isNaN(t)) return '';
+  const sec = Math.floor((Date.now() - t.getTime()) / 1000);
+  if (sec < 60)             return 'just now';
+  if (sec < 60 * 60)        return Math.floor(sec / 60) + ' min ago';
+  // Today: same Y/M/D as now → show HH:MM
+  const now = new Date();
+  const sameDay =
+    t.getFullYear() === now.getFullYear() &&
+    t.getMonth()    === now.getMonth() &&
+    t.getDate()     === now.getDate();
+  const hhmm = String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
+  if (sameDay) return 'today at ' + hhmm;
+  return t.toISOString().slice(0,10) + ' ' + hhmm;
+}
+
 async function loadStatus() {
   try {
     const s = await (await fetch('/api/status')).json();
@@ -26,6 +47,17 @@ async function loadStatus() {
     if (s.configured && s.serverURL && s.token) {
       $('testcard').style.display = '';
       $('testlink').textContent = s.serverURL + '/play?path=/Movies/YourFile.mkv&token=' + s.token;
+    }
+    // "Last paired" indicator — survives server restarts so the user doesn't
+    // think they have to re-pair after every binary upgrade.
+    const lp = s.lastPair;
+    const lpEl = $('lastpair');
+    if (lp && lp.code && lp.at) {
+      lpEl.textContent = 'Last paired with code ' + lp.code + ' · ' + formatAgo(lp.at) +
+                         ' — the TV should still be paired; only re-pair if you reinstall the app on it.';
+      lpEl.style.display = '';
+    } else {
+      lpEl.style.display = 'none';
     }
   } catch (e) { /* server starting */ }
 }
@@ -41,6 +73,8 @@ async function pair() {
   if (res.ok) {
     $('pairmsg').textContent = 'Sent ' + res.url + ' to the TV. Press “Pair” on the TV to finish.';
     $('pairmsg').className = 'msg ok';
+    // Pick up the freshly-saved lastPair without waiting for the 5 s poll.
+    loadStatus();
   } else {
     $('pairmsg').textContent = 'Pairing failed: ' + (res.error || 'unknown');
     $('pairmsg').className = 'msg err';
