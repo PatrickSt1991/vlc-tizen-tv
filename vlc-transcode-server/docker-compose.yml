@@ -1,0 +1,22 @@
+# Drop this on the AM6b+ and run:  docker compose up -d
+# Then open  http://<box-ip>:8200  to enter your SMB share details.
+services:
+  vlc-transcode:
+    # Pulls the prebuilt multi-arch image — no cloning or building needed.
+    image: ghcr.io/patrickst1991/vlc-transcode:latest
+    # Developers building from source instead: comment the line above and
+    # uncomment the next one (run from this directory).
+    # build: .
+    container_name: vlc-transcode
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    volumes:
+      - ./data:/data          # persists your SMB config
+    # Hardware encoder access. Harmless if the box has no /dev/dri — the server
+    # auto-detects and falls back to software. Comment out on boxes without it.
+    devices:
+      - /dev/dri:/dev/dri
+    # group_add may be needed so the container can use the render node:
+    #   - "video"
+    #   - "render"

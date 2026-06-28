@@ -123,6 +123,18 @@ var SMB = (function () {
         return BASE + '/smb/stream?path=' + encodeURIComponent(path);
     }
 
+    /* The URL we actually play. If a transcode server is paired, route through
+     * it (HLS, server-side decode of DTS/TrueHD and codecs the TV can't handle);
+     * otherwise stream the file straight from the localhost smbproxy as before.
+     * Browsing is identical either way — only the bytes' origin changes. */
+    function playableUrl(path) {
+        if (typeof TranscodeServer !== 'undefined' && TranscodeServer.isPaired()) {
+            var u = TranscodeServer.playUrl(path);
+            if (u) return u;
+        }
+        return streamUrl(path);
+    }
+
     /* ── browsing UI (reuses #view-browse, like the USB browser) ───────────*/
     var pathStack = [];     // breadcrumb of folder paths, '' === share root
     var backHandler = null;
@@ -162,7 +174,7 @@ var SMB = (function () {
             // Playable files in this folder → the playlist for next/prev/auto-play.
             var playlist = entries
                 .filter(function (e) { return !e.isDir && isPlayable(e.name); })
-                .map(function (e) { return { uri: streamUrl(join(path, e.name)), title: e.name }; });
+                .map(function (e) { return { uri: playableUrl(join(path, e.name)), title: e.name }; });
 
             // ".." row to go up (except at root).
             if (pathStack.length > 0) {
@@ -187,7 +199,7 @@ var SMB = (function () {
                         render(join(path, e.name));
                         return;
                     }
-                    var uri = streamUrl(join(path, e.name));
+                    var uri = playableUrl(join(path, e.name));
                     var idx = 0;
                     for (var i = 0; i < playlist.length; i++) if (playlist[i].uri === uri) { idx = i; break; }
                     // Hand off to the player; release our Back handler so the

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VLC Transcode Server</title>
+<style>
+  :root { --bg:#11141a; --card:#1b1f29; --line:#2a3040; --fg:#e7ecf3; --mut:#8d97a8; --acc:#ff7a18; --ok:#34c759; --err:#ff5a5a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:640px; margin:0 auto; padding:24px 18px 60px; }
+  h1 { font-size:20px; margin:0 0 2px; display:flex; align-items:center; gap:10px; }
+  h1 .dot { width:10px; height:10px; border-radius:50%; background:var(--mut); }
+  .sub { color:var(--mut); margin:0 0 22px; font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:16px; }
+  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:0 0 14px; }
+  label { display:block; font-size:13px; color:var(--mut); margin:12px 0 4px; }
+  input[type=text], input[type=password] { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:#0e1117; color:var(--fg); font-size:14px; }
+  .row { display:flex; gap:12px; } .row > div { flex:1; }
+  .toggle { display:flex; align-items:center; justify-content:space-between; margin-top:14px; }
+  button { font:inherit; border:0; border-radius:8px; padding:10px 16px; cursor:pointer; }
+  .primary { background:var(--acc); color:#1b1209; font-weight:600; }
+  .ghost { background:#0e1117; color:var(--fg); border:1px solid var(--line); }
+  .bar { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
+  .msg { margin-top:12px; font-size:13px; min-height:18px; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--err); }
+  .kv { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .kv:last-child { border:0; } .kv span:first-child { color:var(--mut); }
+  .pill { font-size:12px; padding:2px 8px; border-radius:99px; background:#0e1117; border:1px solid var(--line); }
+  .switch { width:46px; height:26px; border-radius:99px; background:#0e1117; border:1px solid var(--line); position:relative; cursor:pointer; }
+  .switch.on { background:var(--acc); }
+  .switch i { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:#fff; transition:.15s; }
+  .switch.on i { left:22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot" id="hdot"></span> VLC Transcode Server</h1>
+  <p class="sub">Reads your SMB share, transcodes only what the TV can't play, streams it back.</p>
+
+  <div class="card">
+    <h2>Status</h2>
+    <div class="kv"><span>Encoder</span><span class="pill" id="st-enc">…</span></div>
+    <div class="kv"><span>Hardware accel</span><span class="pill" id="st-hw">…</span></div>
+    <div class="kv"><span>Share</span><span id="st-share">…</span></div>
+    <div class="kv"><span>This server</span><span id="st-url">…</span></div>
+  </div>
+
+  <div class="card">
+    <h2>SMB Share</h2>
+    <div class="row">
+      <div><label>Host / IP</label><input type="text" id="host" placeholder="192.168.1.10"></div>
+      <div style="max-width:110px"><label>Port</label><input type="text" id="port" placeholder="445"></div>
+    </div>
+    <label>Share name</label><input type="text" id="share" placeholder="Media">
+    <div class="toggle">
+      <span>Guest / anonymous</span>
+      <div class="switch" id="anon"><i></i></div>
+    </div>
+    <div id="creds">
+      <div class="row">
+        <div><label>Username</label><input type="text" id="user" placeholder="patrick"></div>
+        <div><label>Domain (optional)</label><input type="text" id="domain"></div>
+      </div>
+      <label>Password</label><input type="password" id="pass" placeholder="••••••• (blank = unchanged)">
+    </div>
+    <div class="bar">
+      <button class="primary" id="save">Save</button>
+      <button class="ghost" id="test">Test connection</button>
+      <button class="ghost" id="browse">Browse share</button>
+    </div>
+    <div class="msg" id="msg"></div>
+    <ul id="list" style="list-style:none;padding:0;margin:12px 0 0;font-size:13px;"></ul>
+  </div>
+
+  <div class="card">
+    <h2>Pair with TV</h2>
+    <p class="sub" style="margin:0 0 10px">On the TV: <b>Settings → Transcode server → Pair</b>. Enter the code it shows here.</p>
+    <div class="row">
+      <div><label>TV pairing code</label><input type="text" id="code" placeholder="e.g. 7gk2p9qx1m"></div>
+      <div style="flex:0 0 auto;display:flex;align-items:flex-end"><button class="primary" id="pair">Pair</button></div>
+    </div>
+    <div class="msg" id="pairmsg"></div>
+  </div>
+
+  <div class="card" id="testcard" style="display:none">
+    <h2>Test transcoding</h2>
+    <p class="sub" style="margin:0 0 8px">Open this in VLC on a laptop to confirm a file plays (replace the path):</p>
+    <code id="testlink" style="display:block;word-break:break-all;background:#0e1117;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;color:var(--acc)"></code>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
