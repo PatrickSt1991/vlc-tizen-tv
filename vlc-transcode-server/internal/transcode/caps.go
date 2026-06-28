@@ -27,16 +27,23 @@ type Caps struct {
 // encoderPriority lists H.264 encoders fastest/most-desirable first. Auto-pick
 // walks this and takes the first one ffmpeg reports as available; libx264 is
 // last and effectively always present, so detection never comes up empty.
+//
+// Cross-platform note: encoders that don't exist on the running host just
+// won't be in ffmpeg's -encoders list, so the same priority array is safe to
+// use on Linux containers, native Windows .exe, and native macOS — each OS
+// auto-picks the encoder its ffmpeg actually ships with.
 var encoderPriority = []struct {
 	name   string
 	family string
 }{
-	{"h264_rkmpp", "rkmpp"},   // Rockchip RK3588/3568
-	{"h264_vaapi", "vaapi"},   // Intel/AMD (and some ARM via Mesa)
-	{"h264_nvenc", "nvenc"},   // Nvidia / Jetson
-	{"h264_qsv", "qsv"},       // Intel QuickSync
-	{"h264_v4l2m2m", "v4l2m2m"}, // Amlogic and many generic ARM SoCs
-	{"libx264", "none"},       // software — universal fallback
+	{"h264_rkmpp", "rkmpp"},               // Rockchip RK3588/3568 (Linux native, custom ffmpeg)
+	{"h264_videotoolbox", "videotoolbox"}, // macOS (Apple Silicon + Intel Macs)
+	{"h264_vaapi", "vaapi"},               // Linux Intel/AMD (Mesa)
+	{"h264_nvenc", "nvenc"},               // NVIDIA / Jetson — cross-platform
+	{"h264_qsv", "qsv"},                   // Intel QuickSync — Windows + Linux
+	{"h264_amf", "amf"},                   // AMD AMF — Windows (and rare Linux builds)
+	{"h264_v4l2m2m", "v4l2m2m"},           // Amlogic and many generic ARM SoCs
+	{"libx264", "none"},                   // software — universal fallback
 }
 
 // Probe locates ffmpeg/ffprobe and picks an encoder. override forces a specific

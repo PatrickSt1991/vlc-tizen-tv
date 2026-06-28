@@ -1,0 +1,102 @@
+name: Build transcode-server native binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'transcode-v*'
+
+permissions:
+  contents: write   # needed to create / attach assets to the GitHub Release
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native installs for users who don't want Docker. Same Go source as
+          # the container image; ffmpeg is expected to be on PATH (Linux/macOS
+          # via the system package manager, Windows via gyan.dev or BtbN — see
+          # vlc-transcode-server/README.md).
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+            ext: '.exe'
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: vlc-transcode-server/go.sum
+
+      - name: Cross-compile
+        working-directory: vlc-transcode-server
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          OUT="vlc-transcode${{ matrix.ext }}"
+          go build -trimpath -ldflags="-s -w" -o "$OUT" .
+          ls -la "$OUT"
+
+      - name: Bundle (binary + README)
+        working-directory: vlc-transcode-server
+        run: |
+          set -euo pipefail
+          BUNDLE="$RUNNER_TEMP/bundle"
+          mkdir -p "$BUNDLE"
+          cp "vlc-transcode${{ matrix.ext }}" "$BUNDLE/"
+          cp README.md "$BUNDLE/"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          ZIP="$GITHUB_WORKSPACE/dist/vlc-transcode-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+          ( cd "$BUNDLE" && zip -r "$ZIP" . )
+          ls -la "$ZIP"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlc-transcode-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Attach binaries to GitHub Release
+    # Only run on tag pushes — workflow_dispatch builds the binaries (uploaded
+    # as build artifacts) but doesn't touch a release.
+    if: startsWith(github.ref, 'refs/tags/transcode-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List
+        run: ls -la dist
+
+      - name: Create / update release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          fail_on_unmatched_files: true
+          tag_name: ${{ github.ref_name }}
+          # Don't overwrite the body/title the maintainer set on the tag.
+          generate_release_notes: false
