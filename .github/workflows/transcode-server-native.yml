@@ -58,7 +58,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
-          OUT="vlc-transcode${{ matrix.ext }}"
+          OUT="vlc-tv-transcode${{ matrix.ext }}"
           go build -trimpath -ldflags="-s -w" -o "$OUT" .
           ls -la "$OUT"
 
@@ -85,7 +85,7 @@ jobs:
           set -euo pipefail
           BUNDLE="$RUNNER_TEMP/bundle"
           mkdir -p "$BUNDLE"
-          cp "vlc-transcode${{ matrix.ext }}" "$BUNDLE/"
+          cp "vlc-tv-transcode${{ matrix.ext }}" "$BUNDLE/"
           cp README.md "$BUNDLE/"
 
           # If this matrix entry bundles ffmpeg, copy ffmpeg + ffprobe alongside
@@ -103,14 +103,14 @@ jobs:
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          ZIP="$GITHUB_WORKSPACE/dist/vlc-transcode-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+          ZIP="$GITHUB_WORKSPACE/dist/vlc-tv-transcode-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
           ( cd "$BUNDLE" && zip -r "$ZIP" . )
           ls -la "$ZIP"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vlc-transcode-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: vlc-tv-transcode-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 14

@@ -1,4 +1,4 @@
-// vlc-transcode-server — a tiny self-hosted companion for the VLC Tizen TV app.
+// vlc-tv-transcode — a tiny self-hosted companion for the VLC Tizen TV app.
 //
 // It reads media from your SMB share, transcodes only what the TV can't decode
 // (DTS/TrueHD audio, unsupported video) into a TV-friendly HLS stream, and hands
@@ -36,7 +36,7 @@ func main() {
 
 	port := envInt("PORT", 8200)
 	dataDir := envStr("DATA_DIR", "/data")
-	workDir := envStr("WORK_DIR", filepath.Join(os.TempDir(), "vlc-transcode"))
+	workDir := envStr("WORK_DIR", filepath.Join(os.TempDir(), "vlc-tv-transcode"))
 
 	// Config (web-editable; created on first save).
 	cfg, err := config.Load(filepath.Join(dataDir, "config.json"))

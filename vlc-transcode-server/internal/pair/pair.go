@@ -24,7 +24,7 @@ const ntfyBase = "https://ntfy.sh"
 
 // Announce is the JSON the TV receives and stores.
 type Announce struct {
-	Type  string `json:"type"`  // always "vlc-transcode-server"
+	Type  string `json:"type"`  // always "vlc-tv-transcode-server"
 	URL   string `json:"url"`   // e.g. "http://192.168.1.50:8200"
 	Token string `json:"token"` // sent back on /play
 	Name  string `json:"name"`  // friendly box name
@@ -39,7 +39,7 @@ func Publish(ctx context.Context, code, serverURL, token string) error {
 	if code == "" {
 		return fmt.Errorf("empty pairing code")
 	}
-	ann := Announce{Type: "vlc-transcode-server", URL: serverURL, Token: token, Name: hostname()}
+	ann := Announce{Type: "vlc-tv-transcode-server", URL: serverURL, Token: token, Name: hostname()}
 	body, _ := json.Marshal(ann)
 
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
@@ -89,7 +89,7 @@ func outboundIP() string {
 func hostname() string {
 	h, err := os.Hostname()
 	if err != nil || h == "" {
-		return "VLC Transcode Server"
+		return "VLC TV Transcode Server"
 	}
 	return h
 }
