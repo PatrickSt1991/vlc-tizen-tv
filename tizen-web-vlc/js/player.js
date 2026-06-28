@@ -806,6 +806,7 @@ var Player = (function () {
         h5Subtitles = playerSubtitles;
         stopExternalSubtitle();    // clear any previous file's poller
         avNativeSubsAllowed = false;   // don't paint AVPlay's stray first-cue at file open
+        currentSpeed = 1;          // playback speed is per-file; reset every open
         backend = pickBackend(url);
         var streamType = sniffStreamType(url);
         if (typeof Debug !== 'undefined') Debug.player('open url=' + url + ' (type=' + streamType + ', backend=' + backend + ', subs=' + playerSubtitles.length + ')');
@@ -1474,6 +1475,32 @@ var Player = (function () {
         return p2(h) + ':' + p2(min) + ':' + p2(s) + '.' + p3(ms);
     }
 
+    /* Playback speed (issue #28 part 3).  AVPlay exposes setSpeed(rate) on
+     * Tizen 2.4+; HTML5 video uses .playbackRate.  We cap at 0.25..4× to
+     * stay inside what AVPlay actually supports — anything wilder either
+     * silently fails or drops audio.  Last applied speed is remembered so
+     * the UI can show the current rate without round-tripping through the
+     * native API (which doesn't have a getter on every firmware). */
+    var currentSpeed = 1;
+    function setSpeed(rate) {
+        rate = +rate;
+        if (!isFinite(rate) || rate <= 0) return false;
+        if (rate < 0.25) rate = 0.25;
+        if (rate > 4)    rate = 4;
+        if (backend === BACKEND_AVPLAY) {
+            try { av().setSpeed(rate); }
+            catch (e) {
+                if (typeof Debug !== 'undefined') Debug.warn('AV setSpeed(' + rate + '): ' + (e.message || e));
+                return false;
+            }
+        } else if (backend === BACKEND_HTML5) {
+            try { h5el().playbackRate = rate; } catch (e) { return false; }
+        }
+        currentSpeed = rate;
+        return true;
+    }
+    function getSpeed() { return currentSpeed; }
+
     return {
         setListener:        setListener,
         open:               open,
@@ -1491,6 +1518,8 @@ var Player = (function () {
         setSubtitleTrack:   setSubtitleTrack,
         setDisplayRect:     setDisplayRect,
         isBuffering:        isBuffering,
-        lastBufferingMs:    lastBufferingMs
+        lastBufferingMs:    lastBufferingMs,
+        setSpeed:           setSpeed,
+        getSpeed:           getSpeed
     };
 })();
