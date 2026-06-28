@@ -2,6 +2,8 @@ package transcode
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -86,8 +88,9 @@ func Probe(override string) (*Caps, error) {
 
 	// Honour an explicit override if ffmpeg actually has it — the user is
 	// telling us they know better than the auto-detect.  Skip the OS gate
-	// here; if they ask for h264_vaapi on Windows they get the obvious
-	// runtime error rather than a silent fallback that's harder to debug.
+	// and the runtime probe; if they ask for h264_nvenc on a box without an
+	// NVIDIA driver they get the obvious "Cannot load nvcuda.dll" error
+	// rather than a silent fallback that's harder to debug.
 	if override != "" && avail[override] {
 		c.VideoEncoder = override
 		c.HWAccel = familyOf(override)
@@ -96,11 +99,26 @@ func Probe(override string) (*Caps, error) {
 			if !osMatches(e.oses) {
 				continue
 			}
-			if avail[e.name] {
-				c.VideoEncoder = e.name
-				c.HWAccel = e.family
-				break
+			if !avail[e.name] {
+				continue
 			}
+			// "Compiled into ffmpeg" doesn't mean "runs on this box".
+			// h264_nvenc needs nvcuda.dll (NVIDIA driver), h264_qsv needs
+			// Intel Media SDK / iGPU, h264_amf needs AMF runtime.  BtbN's
+			// Windows build lists ALL of them in -encoders even when only
+			// one (or none) has a working runtime, so we probe each by
+			// asking ffmpeg to encode a single 64x64 black frame.  The
+			// first encoder that actually starts wins.  libx264 is software
+			// and always works, so we shortcut past the probe for it.
+			if e.family != "none" {
+				if err := probeEncoder(ff, e.name); err != nil {
+					log.Printf("encoder %s skipped (runtime not usable): %s", e.name, summariseProbeErr(err))
+					continue
+				}
+			}
+			c.VideoEncoder = e.name
+			c.HWAccel = e.family
+			break
 		}
 	}
 	if c.VideoEncoder == "" { // extremely unlikely; ffmpeg without libx264
@@ -148,4 +166,68 @@ func firstExisting(paths []string) string {
 		}
 	}
 	return ""
+}
+
+// probeEncoder actually tries to use an encoder so we can tell whether the
+// runtime exists (not just whether ffmpeg was compiled with the library).
+// A single 64x64 black frame from lavfi, encoded to /dev/null (or NUL on
+// Windows via "-f null -"), is enough to make ffmpeg open and configure the
+// encoder — the failure modes we care about (missing nvcuda.dll, no VAAPI
+// device, no QSV runtime, no AMF runtime) all surface during that init.
+// Returns nil if ffmpeg exited cleanly, otherwise an error wrapping ffmpeg's
+// stderr so the caller can log a useful reason for the skip.
+//
+// Timeout is generous (10 s) because some HW init paths legitimately take a
+// few seconds on first use (driver load, GPU context creation).  In practice
+// success returns in well under a second; the timeout only matters when
+// something is wedged.
+func probeEncoder(ffmpeg, name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffmpeg,
+		"-hide_banner",
+		"-loglevel", "error",
+		"-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1",
+		"-frames:v", "1",
+		"-an",
+		"-c:v", name,
+		"-f", "null", "-",
+	)
+	// We want stderr — ffmpeg writes its errors there — but for the success
+	// case we don't care about it.  CombinedOutput captures both, fine for a
+	// short probe.
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// summariseProbeErr trims ffmpeg's verbose error output down to one line so
+// the startup log stays readable.  The signal we want is usually in the
+// first few error lines (the "Cannot load nvcuda.dll" / "Failed to load
+// VAAPI driver" / etc.), not the trailing trace.
+func summariseProbeErr(err error) string {
+	s := err.Error()
+	// Keep the most-informative chunk: the first line that contains an
+	// obvious error marker, falling back to the first non-empty line.
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(line), "cannot") ||
+			strings.Contains(strings.ToLower(line), "error") ||
+			strings.Contains(strings.ToLower(line), "failed") ||
+			strings.Contains(strings.ToLower(line), "not found") {
+			if len(line) > 180 {
+				line = line[:180] + "…"
+			}
+			return line
+		}
+	}
+	if len(s) > 180 {
+		s = s[:180] + "…"
+	}
+	return s
 }
