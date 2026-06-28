@@ -41,6 +41,84 @@ Then open **`http://<box-ip>:8200`** in any browser and fill in your SMB share
 (host, share name, username/password — or toggle Guest). Use **Test connection**
 and **Browse share** to confirm it can see your files.
 
+## Run it natively (Windows / macOS / no-Docker Linux)
+
+Docker is the recommended path on a server / NAS / Proxmox box that's going to
+stay up. For Windows and macOS — or any machine where installing Docker is more
+effort than the transcoder itself — there are static binaries you can run
+straight, no container. They're built from the same Go source as the image and
+go through the same encoder auto-detection at startup.
+
+**1. Grab the binary** for your platform from the
+[Releases page](https://github.com/PatrickSt1991/vlc-tizen-tv/releases),
+under the latest `transcode-v*` tag:
+
+| OS | Asset |
+|---|---|
+| Windows x64 | `vlc-transcode-windows-amd64.zip` |
+| macOS Apple Silicon | `vlc-transcode-darwin-arm64.zip` |
+| macOS Intel | `vlc-transcode-darwin-amd64.zip` |
+| Linux x64 | `vlc-transcode-linux-amd64.zip` |
+| Linux ARM64 (Raspberry Pi 4/5, generic ARM) | `vlc-transcode-linux-arm64.zip` |
+
+Unzip anywhere. There's a single executable plus this README.
+
+**2. Install ffmpeg**, because — unlike the Docker image — the bundle doesn't
+ship it. Recommended sources:
+
+| OS | Where to get ffmpeg |
+|---|---|
+| Windows | [gyan.dev "full" build](https://www.gyan.dev/ffmpeg/builds/) or [BtbN "gpl" build](https://github.com/BtbN/FFmpeg-Builds/releases). Either includes `h264_qsv` (Intel), `h264_nvenc` (NVIDIA), and `h264_amf` (AMD). Drop `ffmpeg.exe` and `ffprobe.exe` either on your `PATH` or next to `vlc-transcode.exe`. |
+| macOS | `brew install ffmpeg` — Homebrew's build includes `h264_videotoolbox` for native Apple Silicon / Intel HW encoding. |
+| Linux | `apt install ffmpeg` or your distro equivalent. Includes VAAPI, NVENC and software encoders. |
+
+**3. Run it.** It listens on `:8200` on all interfaces, so it's reachable
+from the TV out of the box. You only need to point it at a writable data
+directory (where the config + pairing token live):
+
+```bash
+# Linux / macOS
+DATA_DIR=./vlc-data ./vlc-transcode
+
+# Windows (cmd.exe / PowerShell)
+set DATA_DIR=%CD%\vlc-data
+vlc-transcode.exe
+```
+
+If you'd rather use a different port, set `PORT=8201` (etc.) in the same
+env. The default `/data` is fine inside Docker but won't exist on a native
+install — `./vlc-data` next to the binary is the easiest choice.
+
+On first start, the binary prints something like:
+
+```
+ffmpeg=/usr/bin/ffmpeg encoder=h264_qsv (qsv)
+listening on :8200
+```
+
+If it instead exits with `ffmpeg not found — install ffmpeg`, your `ffmpeg`
+isn't on `PATH`. Either install it (see the table above) or put `ffmpeg(.exe)`
+and `ffprobe(.exe)` in the same folder as `vlc-transcode(.exe)`.
+
+Then open `http://<this-machine's-LAN-IP>:8200` and continue with [Pair with the
+TV](#pair-with-the-tv) below.
+
+### Why native sometimes beats Docker
+
+For Windows users specifically, the native binary unlocks GPU encoding that
+Docker can't reach:
+
+| GPU | Docker on Windows | Native Windows |
+|---|---|---|
+| Intel iGPU (QuickSync) | ❌ no path — `--device /dev/dri` doesn't exist on WSL2 | ✅ `h264_qsv` auto-detected |
+| NVIDIA | ⚠️ works with Docker Desktop + NVIDIA Container Toolkit + `--gpus all` (fiddly) | ✅ `h264_nvenc` auto-detected |
+| AMD | ❌ no path | ✅ `h264_amf` auto-detected |
+| None / unsupported | software (`libx264`), slow | software (`libx264`), slow |
+
+On macOS, native always wins — Docker Desktop on macOS runs a Linux VM with no
+GPU passthrough, so the container is forced into software encoding; the native
+binary uses `h264_videotoolbox` via macOS's hardware encoder.
+
 ## Pair with the TV
 
 On the TV: **Settings → Transcode server → Pair**, then enter the code the TV
