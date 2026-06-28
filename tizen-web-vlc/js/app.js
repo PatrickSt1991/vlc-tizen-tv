@@ -142,6 +142,7 @@
                 showOSD(true);
                 scheduleOSDHide();
                 applyLanguagePreferences();
+                updateSpeedButton();   // Player.open reset speed to 1×; reflect it on the OSD
             }
         });
         Player.setListener('onerror', function (msg) {
@@ -221,6 +222,7 @@
             case 'seek-backward':      Player.seekRel(-60000); flashOSD(); break;
             case 'seek-forward':       Player.seekRel( 60000); flashOSD(); break;
             case 'toggle-repeat':      toggleRepeat(); break;
+            case 'open-speed-picker':  openSpeedPicker(); break;
             case 'open-track-menu':    openTrackMenu(); break;
             case 'close-track-menu':   closeTrackMenu(); break;
             case 'setting-audio-lang':    openLangPicker('audioLang',    'Preferred audio language', LanguageList.forAudio());    break;
@@ -830,6 +832,37 @@
             refreshSettingsValues();
             UI.toast(title + ' updated');
         });
+    }
+    /* Playback-speed picker (issue #28 part 3).  Six rates from 0.5× to 2×,
+     * applied via Player.setSpeed() which targets AVPlay's setSpeed on the
+     * TV and HTMLVideoElement.playbackRate as the fallback.  Speed is
+     * deliberately session-only — every Player.open() resets to 1× so a
+     * binge-watch session doesn't accidentally play episode 2 at 1.5×
+     * because episode 1 was. */
+    function openSpeedPicker() {
+        var cur = String(Player.getSpeed ? Player.getSpeed() : 1);
+        openPicker('Playback speed', [
+            { code: '0.5',  name: '0.5×' },
+            { code: '0.75', name: '0.75×' },
+            { code: '1',    name: 'Normal (1×)' },
+            { code: '1.25', name: '1.25×' },
+            { code: '1.5',  name: '1.5×' },
+            { code: '2',    name: '2×' }
+        ], cur, function (val) {
+            if (!Player.setSpeed(parseFloat(val))) {
+                UI.toast('Speed change not supported on this stream');
+                return;
+            }
+            updateSpeedButton();
+            UI.toast('Speed: ' + (val === '1' ? 'normal' : val + '×'));
+        });
+    }
+    function updateSpeedButton() {
+        var btn = document.getElementById('btn-speed');
+        if (!btn) return;
+        var s = Player.getSpeed ? Player.getSpeed() : 1;
+        // Compact label: "1×" / "1.5×" — no trailing zeros so "1.5×" not "1.50×".
+        btn.textContent = (s === Math.floor(s) ? s : (Math.round(s * 100) / 100)) + '×';
     }
     function openAutoPlayPicker() {
         pickerSetting = 'autoPlay';
