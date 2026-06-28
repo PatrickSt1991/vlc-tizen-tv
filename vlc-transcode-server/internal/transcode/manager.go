@@ -143,7 +143,7 @@ func waitReady(ctx context.Context, s *session) error {
 			return nil
 		}
 		if s.isDone() {
-			return fmt.Errorf("ffmpeg exited before producing output: %s", s.tail())
+			return fmt.Errorf("ffmpeg exited before producing output: %s", s.tailAll())
 		}
 		select {
 		case <-ctx.Done():
@@ -185,6 +185,14 @@ func drain(r interface{ Read([]byte) (int, error) }, s *session) {
 
 func (s *session) tail() string { return s.logTail.last() }
 
+// tailAll returns every non-empty line the ring still holds, oldest first,
+// joined with " / " so it survives travelling through a single-line error
+// message.  Used when ffmpeg dies before producing output — the bare last
+// line ("Nothing was written into output file…") rarely names the actual
+// cause, but the lines before it (input format, stream count, demuxer
+// warnings, codec rejections) usually do. */
+func (s *session) tailAll() string { return s.logTail.dump() }
+
 // ── tiny line ring buffer for surfacing ffmpeg's last words on failure ──────
 type ring struct {
 	mu   sync.Mutex
@@ -217,4 +225,36 @@ func (r *ring) last() string {
 		}
 	}
 	return "(no output)"
+}
+
+// dump returns every non-empty line oldest-first, joined with " / ".
+func (r *ring) dump() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.full && r.n == 0 {
+		return "(no output)"
+	}
+	size := len(r.buf)
+	start := 0
+	if r.full {
+		start = r.n // when full, oldest line lives at r.n
+	}
+	lines := make([]string, 0, size)
+	for i := 0; i < size; i++ {
+		idx := (start + i) % size
+		if r.buf[idx] != "" {
+			lines = append(lines, r.buf[idx])
+		}
+	}
+	if len(lines) == 0 {
+		return "(no output)"
+	}
+	// " / " is a separator unlikely to appear inside ffmpeg's own log lines,
+	// keeps everything on one telemetry line even when it travels through
+	// log.Printf or an HTTP error body.
+	out := lines[0]
+	for _, ln := range lines[1:] {
+		out += " / " + ln
+	}
+	return out
 }

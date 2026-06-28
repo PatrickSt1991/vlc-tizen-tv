@@ -61,7 +61,12 @@ func (s *session) stop() {
 // the per-file plan. Software decode + (optional) hardware encode keeps the
 // device handling simple while still offloading the expensive encode step.
 func (c *Caps) buildArgs(in string, p Plan, dir string) []string {
-	a := []string{"-hide_banner", "-loglevel", "warning", "-y"}
+	// loglevel "info" keeps the lines we actually need for diagnosis (input
+	// format, stream count, codec mapping, "Output #0" / "Stream mapping",
+	// demuxer warnings) — without flooding the ring buffer like "verbose"
+	// would.  When ffmpeg dies, tailAll() dumps all of these to the failure
+	// message so we can see the cause rather than just "Nothing was written".
+	a := []string{"-hide_banner", "-loglevel", "info", "-y"}
 
 	// Robustness on the internal HTTP raw bridge.
 	a = append(a, "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2")
