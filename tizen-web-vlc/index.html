@@ -208,24 +208,15 @@
             </button>
         </div>
 
-        <h2 class="settings-section-title">SMB network share</h2>
-        <div class="settings-group">
-            <label class="settings-row settings-row-input"><span class="settings-label">Server (IP/host)</span><input id="smb-host"   type="text"     placeholder="192.168.1.10"></label>
-            <label class="settings-row settings-row-input"><span class="settings-label">Share</span><input id="smb-share"  type="text"     placeholder="Media"></label>
-            <button class="settings-row" id="smb-anon"><div class="settings-label">Guest (no login)</div><div class="settings-value" id="smb-anon-val">Off</div></button>
-            <label class="settings-row settings-row-input"><span class="settings-label">Username</span><input id="smb-user"   type="text"     placeholder="guest"></label>
-            <label class="settings-row settings-row-input"><span class="settings-label">Password</span><input id="smb-pass"   type="password"></label>
-            <label class="settings-row settings-row-input"><span class="settings-label">Domain (optional)</span><input id="smb-domain" type="text"></label>
-            <button id="smb-save" class="settings-row"><span class="settings-label">Save SMB server</span></button>
-        </div>
-
-        <h2 class="settings-section-title">Transcode server</h2>
-        <div class="settings-group">
-            <div class="settings-row"><div class="settings-label">Status</div><div class="settings-value" id="srv-status-val">Not paired</div></div>
-            <button id="srv-pair" class="settings-row" data-focus><span class="settings-label">Pair transcode server</span></button>
-            <button id="srv-unpair" class="settings-row"><span class="settings-label">Remove transcode server</span></button>
-        </div>
-
+        <!-- Subtitle appearance is moved ABOVE the network-input sections
+             below: those sections contain text fields that pop the on-screen
+             keyboard the moment a focus lands on them, and on slower Tizen
+             firmware the open/close-keyboard storm while scrolling past them
+             could lag the UI or crash the app entirely (issue #28).  Sections
+             that contain text inputs are now collapsed by default — the
+             header is a focusable button that expands the group on press, so
+             users navigating with the D-pad land on chevrons rather than
+             stepping through every input. -->
         <h2 class="settings-section-title">Subtitle appearance</h2>
         <div class="settings-group">
             <button class="settings-row" data-action="setting-subtitle-size">
@@ -258,8 +249,35 @@
             </div>
         </div>
 
-        <h2 class="settings-section-title">Debug logging</h2>
-        <div class="settings-group">
+        <button class="settings-section-toggle" data-toggle="grp-smb" aria-expanded="false">
+            <span class="settings-section-title">SMB network share</span>
+            <span class="settings-section-chev" aria-hidden="true">▸</span>
+        </button>
+        <div class="settings-group is-collapsed" id="grp-smb">
+            <label class="settings-row settings-row-input"><span class="settings-label">Server (IP/host)</span><input id="smb-host"   type="text"     placeholder="192.168.1.10"></label>
+            <label class="settings-row settings-row-input"><span class="settings-label">Share</span><input id="smb-share"  type="text"     placeholder="Media"></label>
+            <button class="settings-row" id="smb-anon"><div class="settings-label">Guest (no login)</div><div class="settings-value" id="smb-anon-val">Off</div></button>
+            <label class="settings-row settings-row-input"><span class="settings-label">Username</span><input id="smb-user"   type="text"     placeholder="guest"></label>
+            <label class="settings-row settings-row-input"><span class="settings-label">Password</span><input id="smb-pass"   type="password"></label>
+            <label class="settings-row settings-row-input"><span class="settings-label">Domain (optional)</span><input id="smb-domain" type="text"></label>
+            <button id="smb-save" class="settings-row"><span class="settings-label">Save SMB server</span></button>
+        </div>
+
+        <button class="settings-section-toggle" data-toggle="grp-srv" aria-expanded="false">
+            <span class="settings-section-title">Transcode server</span>
+            <span class="settings-section-chev" aria-hidden="true">▸</span>
+        </button>
+        <div class="settings-group is-collapsed" id="grp-srv">
+            <div class="settings-row"><div class="settings-label">Status</div><div class="settings-value" id="srv-status-val">Not paired</div></div>
+            <button id="srv-pair" class="settings-row"><span class="settings-label">Pair transcode server</span></button>
+            <button id="srv-unpair" class="settings-row"><span class="settings-label">Remove transcode server</span></button>
+        </div>
+
+        <button class="settings-section-toggle" data-toggle="grp-dbg" aria-expanded="false">
+            <span class="settings-section-title">Debug logging</span>
+            <span class="settings-section-chev" aria-hidden="true">▸</span>
+        </button>
+        <div class="settings-group is-collapsed" id="grp-dbg">
             <button class="settings-row" id="dbg-enabled"><div class="settings-label">Send debug logs</div><div class="settings-value" id="dbg-enabled-val">Off</div></button>
             <label class="settings-row settings-row-input"><span class="settings-label">Listener IP</span><input id="dbg-host" type="text" placeholder="192.168.1.50"></label>
             <label class="settings-row settings-row-input"><span class="settings-label">Listener port</span><input id="dbg-port" type="text" placeholder="9999"></label>

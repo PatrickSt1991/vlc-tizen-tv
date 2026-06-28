@@ -101,6 +101,24 @@
             if (t) handleAction(t.dataset.action, t);
         });
 
+        // Collapsible Settings sections (issue #28): clicking a section
+        // toggle expands or collapses the next-sibling .settings-group it
+        // points at via data-toggle.  Because the collapsed state uses
+        // display:none, the inputs inside fall out of the focusable list
+        // and the D-pad can't accidentally land on them — which is what
+        // was popping the on-screen keyboard repeatedly and lagging /
+        // crashing the app on slower Tizen firmware.
+        document.body.addEventListener('click', function (ev) {
+            var t = ev.target.closest('.settings-section-toggle');
+            if (!t) return;
+            var grp = document.getElementById(t.getAttribute('data-toggle'));
+            if (!grp) return;
+            var opening = grp.classList.contains('is-collapsed');
+            grp.classList.toggle('is-collapsed', !opening);
+            t.setAttribute('aria-expanded', opening ? 'true' : 'false');
+            UI.refreshFocusables();
+        });
+
         // Preset URL chips
         document.querySelectorAll('.preset').forEach(function (el) {
             el.addEventListener('click', function () {
