@@ -24,6 +24,16 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags)
 
+	// Native installs bundle ffmpeg/ffprobe in the same directory as this
+	// binary — prepend that directory to PATH so exec.LookPath finds them
+	// without the user having to add anything to their system PATH.  On
+	// Docker / system installs this is a no-op (ffmpeg is already on PATH
+	// and the lookup just finds the system one first if our dir doesn't
+	// contain a binary by that name).
+	if exe, err := os.Executable(); err == nil {
+		os.Setenv("PATH", filepath.Dir(exe)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+
 	port := envInt("PORT", 8200)
 	dataDir := envStr("DATA_DIR", "/data")
 	workDir := envStr("WORK_DIR", filepath.Join(os.TempDir(), "vlc-transcode"))

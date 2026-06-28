@@ -53,26 +53,21 @@ go through the same encoder auto-detection at startup.
 [Releases page](https://github.com/PatrickSt1991/vlc-tizen-tv/releases),
 under the latest `transcode-v*` tag:
 
-| OS | Asset |
-|---|---|
-| Windows x64 | `vlc-transcode-windows-amd64.zip` |
-| macOS Apple Silicon | `vlc-transcode-darwin-arm64.zip` |
-| macOS Intel | `vlc-transcode-darwin-amd64.zip` |
-| Linux x64 | `vlc-transcode-linux-amd64.zip` |
-| Linux ARM64 (Raspberry Pi 4/5, generic ARM) | `vlc-transcode-linux-arm64.zip` |
+| OS | Asset | Bundled ffmpeg? |
+|---|---|---|
+| Windows x64 | `vlc-transcode-windows-amd64.zip` | ✅ included (BtbN GPL build) |
+| Linux x64 | `vlc-transcode-linux-amd64.zip` | ✅ included (BtbN GPL build) |
+| Linux ARM64 (Raspberry Pi 4/5, generic ARM) | `vlc-transcode-linux-arm64.zip` | ✅ included |
+| macOS Apple Silicon | `vlc-transcode-darwin-arm64.zip` | ❌ run `brew install ffmpeg` |
+| macOS Intel | `vlc-transcode-darwin-amd64.zip` | ❌ run `brew install ffmpeg` |
 
-Unzip anywhere. There's a single executable plus this README.
+Unzip anywhere. On Windows + Linux that gets you `vlc-transcode(.exe)` plus
+`ffmpeg(.exe)` and `ffprobe(.exe)` in the same folder — the server picks them
+up automatically (the binary prepends its own directory to `PATH` at
+startup), so there's nothing to install. On macOS, `brew install ffmpeg` once
+and it's permanently on `PATH`.
 
-**2. Install ffmpeg**, because — unlike the Docker image — the bundle doesn't
-ship it. Recommended sources:
-
-| OS | Where to get ffmpeg |
-|---|---|
-| Windows | [gyan.dev "full" build](https://www.gyan.dev/ffmpeg/builds/) or [BtbN "gpl" build](https://github.com/BtbN/FFmpeg-Builds/releases). Either includes `h264_qsv` (Intel), `h264_nvenc` (NVIDIA), and `h264_amf` (AMD). Drop `ffmpeg.exe` and `ffprobe.exe` either on your `PATH` or next to `vlc-transcode.exe`. |
-| macOS | `brew install ffmpeg` — Homebrew's build includes `h264_videotoolbox` for native Apple Silicon / Intel HW encoding. |
-| Linux | `apt install ffmpeg` or your distro equivalent. Includes VAAPI, NVENC and software encoders. |
-
-**3. Run it.** It listens on `:8200` on all interfaces, so it's reachable
+**2. Run it.** It listens on `:8200` on all interfaces, so it's reachable
 from the TV out of the box. You only need to point it at a writable data
 directory (where the config + pairing token live):
 
