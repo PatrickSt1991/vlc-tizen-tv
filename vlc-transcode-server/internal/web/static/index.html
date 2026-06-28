@@ -81,6 +81,9 @@
       <div style="flex:0 0 auto;display:flex;align-items:flex-end"><button class="primary" id="pair">Pair</button></div>
     </div>
     <div class="msg" id="pairmsg"></div>
+    <!-- Persisted across restarts so the user can see "yes, a TV is paired"
+         rather than wondering if they need to re-pair after every upgrade. -->
+    <p class="sub" id="lastpair" style="margin:8px 0 0;display:none"></p>
   </div>
 
   <div class="card" id="testcard" style="display:none">
