@@ -41,6 +41,21 @@ var SMB = (function () {
     function setCreds(c) {
         try { localStorage.setItem(CREDS_KEY, JSON.stringify(c || {})); } catch (e) {}
     }
+
+    /* Accept smb://host:port, //host/share, host:port, or a bare host. Split
+     * the port out so it can reach the proxy (SmbConnection only honours
+     * opts.port), and never leave a colon in host: net.connect treats
+     * "ip:port" as a hostname and getaddrinfo ENOTFOUNDs it. */
+    function normalizeServer(raw) {
+        var s = String(raw == null ? '' : raw).trim();
+        s = s.replace(/^smb:\/\//i, '').replace(/^\/+/, ''); // drop scheme + slashes
+        s = s.split('/')[0];                                 // drop any host/share tail
+        var port = 0;
+        var m = s.match(/^(\[[^\]]+\]|[^:]+):(\d+)$/);        // host:port (IPv6 in [])
+        if (m) { s = m[1]; port = parseInt(m[2], 10); }
+        s = s.replace(/^\[|\]$/g, '');                        // unwrap bare [ipv6]
+        return { host: s, port: port };
+    }
     function haveCreds() { var c = getCreds(); return !!(c.host && c.share); }
 
     /* ── tiny XHR helpers (the service sets permissive CORS) ───────────────*/
@@ -278,7 +293,7 @@ var SMB = (function () {
         var btn = document.getElementById('smb-save');
         if (!btn) return;
         var c = getCreds();
-        var ids = ['host', 'share', 'user', 'pass', 'domain'];
+        var ids = ['host', 'port', 'share', 'user', 'pass', 'domain'];
         ids.forEach(function (k) {
             var el = document.getElementById('smb-' + k);
             if (el && c[k] != null) el.value = c[k];
@@ -301,6 +316,11 @@ var SMB = (function () {
                 nc[k] = el ? el.value.trim() : '';
             });
             nc.anonymous = anonState;
+            var sv = normalizeServer(nc.host);
+            nc.host = sv.host;
+            // Port precedence: explicit Port field > inline host:port > default.
+            var typedPort = parseInt(nc.port, 10);
+            nc.port = typedPort || sv.port || 445;
             setCreds(nc);
             UI.toast('SMB server saved');
         });
