@@ -619,8 +619,9 @@ button:focus { outline: none; }
     margin: 0 4px;
 }
 
-/* ── Repeat button (active state highlight) ──────────────────────── */
-.ctrl.repeat-on {
+/* ── Repeat / shuffle buttons (active state highlight) ───────────── */
+.ctrl.repeat-on,
+.ctrl.shuffle-on {
     color: var(--accent);
     background: var(--accent-soft);
 }
