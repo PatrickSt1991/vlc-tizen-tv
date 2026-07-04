@@ -90,6 +90,17 @@
     // Latest progress sample, used to decide partial-watch → watched on exit.
     var lastProgress = { time: 0, duration: 0 };
 
+    /* When the TV goes to standby, Tizen suspends the WebView.  AVPlay does
+     * NOT survive this cleanly: on wake the session comes back with A/V
+     * desync (short standby) or in a broken state where every operation
+     * returns a codec-shaped error (long standby — the "MKV couldn't be
+     * played" false report in issue #42).  Instead of trusting whatever
+     * AVPlay hands back, we snapshot the current file + position on hidden
+     * and re-open it from scratch on visible.  See onVisibilityChange +
+     * the pendingResume block in the onstatechange('playing') handler. */
+    var standbySnapshot = null;
+    var pendingResume   = null;
+
     /* ── Init ─────────────────────────────────────────────────────── */
     function init() {
         Remote.init();
@@ -143,6 +154,20 @@
                 scheduleOSDHide();
                 applyLanguagePreferences();
                 updateSpeedButton();   // Player.open reset speed to 1×; reflect it on the OSD
+
+                /* Post-standby resume (issue #42): apply the saved position
+                 * + paused state once the freshly-reopened file is actually
+                 * playing.  Left paused so pressing Play resumes on the
+                 * user's terms rather than blasting audio on TV wake. */
+                if (pendingResume) {
+                    var pr = pendingResume; pendingResume = null;
+                    if (typeof Debug !== 'undefined')
+                        Debug.player('standby-resume: seekTo=' + pr.pos + ' paused=' + pr.paused);
+                    try {
+                        if (pr.pos > 1500) Player.seekTo(pr.pos);
+                        if (pr.paused)     Player.pause();
+                    } catch (e) {}
+                }
             }
         });
         Player.setListener('onerror', function (msg) {
@@ -190,6 +215,9 @@
 
         // Reflow display rect on size changes
         window.addEventListener('resize', Player.setDisplayRect);
+
+        // Standby-safe playback restore (issue #42).
+        document.addEventListener('visibilitychange', onVisibilityChange);
 
         UI.showView('view-home');
         updateRepeatButton();        // reflect saved repeat preference on OSD
@@ -429,6 +457,40 @@
         });
         UI.refreshFocusables();
         UI.focusOn(ul.firstElementChild);
+    }
+
+    /* ── Standby handling (issue #42) ────────────────────────────────
+     * Tizen sends `visibilitychange` when the TV screen turns off / the app
+     * gets hidden by another surface.  AVPlay's session doesn't survive
+     * that reliably (see the standbySnapshot comment above); we tear down
+     * on hidden and, on wake, re-open the same file with the saved
+     * subtitles list and defer a seek-to-position + pause until the new
+     * session actually reaches PLAYING (handled in the onstatechange
+     * listener). */
+    function onVisibilityChange() {
+        if (document.visibilityState === 'hidden') {
+            if (state.view !== 'player' || !state.playingUri) return;
+            var subs = [];
+            var cur = state.playlist[state.playlistIndex];
+            if (cur && cur.subtitles) subs = cur.subtitles;
+            standbySnapshot = {
+                uri:       state.playingUri,
+                title:     state.playingTitle,
+                subtitles: subs,
+                pos:       Player.currentTime() || 0,
+                paused:    Player.state() === 'PAUSED'
+            };
+            if (typeof Debug !== 'undefined')
+                Debug.player('visibility=hidden: snapshot pos=' + standbySnapshot.pos + 'ms paused=' + standbySnapshot.paused);
+            try { Player.stop(); } catch (e) {}
+        } else if (document.visibilityState === 'visible') {
+            if (!standbySnapshot) return;
+            var ss = standbySnapshot; standbySnapshot = null;
+            if (typeof Debug !== 'undefined')
+                Debug.player('visibility=visible: restoring ' + ss.uri + ' at ' + ss.pos + 'ms');
+            pendingResume = { pos: ss.pos, paused: ss.paused };
+            playUri(ss.uri, ss.title, { subtitles: ss.subtitles });
+        }
     }
 
     /* ── Common: open a URI in player view ────────────────────────── */
