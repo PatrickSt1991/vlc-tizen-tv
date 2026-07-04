@@ -191,6 +191,17 @@
         // Reflow display rect on size changes
         window.addEventListener('resize', Player.setDisplayRect);
 
+        // Second path for dedicated remote media keys (issue #42): on some
+        // Samsung Smart Monitors the remote's Play / Pause / FF / RW keys
+        // never arrive as `keydown` events at all — they're routed through
+        // Chromium's MediaSession API instead.  Register handlers so those
+        // remotes control playback too.  Only meaningful for the HTML5
+        // backend (MP4/HLS); the AVPlay backend doesn't own a media element
+        // and never becomes the browser's "active" media session, so this
+        // is best-effort — the tvinputdevice path in remote.js remains the
+        // primary route for AVPlay files.
+        installMediaSessionHandlers();
+
         UI.showView('view-home');
         updateRepeatButton();        // reflect saved repeat preference on OSD
         SubtitleStyle.apply();       // push saved subtitle appearance onto the overlay
@@ -597,6 +608,25 @@
         osdHideTimer = setTimeout(function () { showOSD(false); }, 5000);
     }
     function flashOSD() { showOSD(true); scheduleOSDHide(); }
+
+    function installMediaSessionHandlers() {
+        if (!('mediaSession' in navigator)) return;
+        function ifPlaying(fn) {
+            return function () { if (state.view === 'player') { fn(); flashOSD(); } };
+        }
+        var pairs = [
+            ['play',          ifPlaying(function () { Player.play(); })],
+            ['pause',         ifPlaying(function () { Player.pause(); })],
+            ['stop',          ifPlaying(function () { exitPlayer(); })],
+            ['seekbackward',  ifPlaying(function () { Player.seekRel(-30000); })],
+            ['seekforward',   ifPlaying(function () { Player.seekRel( 30000); })],
+            ['previoustrack', ifPlaying(function () { playPrev(); })],
+            ['nexttrack',     ifPlaying(function () { playNext(false); })]
+        ];
+        for (var i = 0; i < pairs.length; i++) {
+            try { navigator.mediaSession.setActionHandler(pairs[i][0], pairs[i][1]); } catch (e) {}
+        }
+    }
 
     function showSpinner(msg) {
         var sp = document.getElementById('spinner');
