@@ -100,7 +100,7 @@ jobs:
       - name: Compute version + date tags
         id: meta
         run: |
-          VERSION=$(grep -oE 'version="[0-9.]+"' tizen-web-vlc/config.xml | head -1 | cut -d'"' -f2)
+          VERSION=$(grep -oE 'version="[0-9.]+"' tizen-web-vlc/config.xml | tail -1 | cut -d'"' -f2)
           DATE_TAG=$(date +'%Y%m%d-%H%M')
           DATE_PRETTY=$(date +'%Y-%m-%d %H:%M UTC')
           {
