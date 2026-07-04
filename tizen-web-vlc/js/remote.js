@@ -42,6 +42,10 @@ var Remote = (function () {
             'MediaPlay', 'MediaPause', 'MediaStop',
             'MediaRewind', 'MediaFastForward',
             'MediaPlayPause', 'MediaRecord',
+            /* MediaTrackPrevious / MediaTrackNext land on some Smart Monitor
+             * firmwares that don't ship a full media strip on the remote
+             * (issue #42).  Silently skipped by registerKey if unknown. */
+            'MediaTrackPrevious', 'MediaTrackNext',
             'ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue',
             'Info', 'Guide',
             'ChannelUp', 'ChannelDown',
@@ -72,6 +76,10 @@ var Remote = (function () {
                 return;
             }
         }
+        /* Log unhandled keycodes so users hitting a remote key that does
+         * nothing (issue #42, Smart Monitor M5) can share the numeric code
+         * with us and we can wire it into globalKeyHandler. */
+        if (typeof Debug !== 'undefined') Debug.key('unhandled ' + code);
     }
 
     /* Listeners are tried in REVERSE registration order (most-recently-pushed
