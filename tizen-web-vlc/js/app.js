@@ -232,6 +232,7 @@
 
         UI.showView('view-home');
         updateRepeatButton();        // reflect saved repeat preference on OSD
+        updateShuffleButton();       // reflect saved shuffle preference on OSD
         SubtitleStyle.apply();       // push saved subtitle appearance onto the overlay
     }
 
@@ -261,6 +262,7 @@
             case 'seek-backward':      Player.seekRel(-60000); flashOSD(); break;
             case 'seek-forward':       Player.seekRel( 60000); flashOSD(); break;
             case 'toggle-repeat':      toggleRepeat(); break;
+            case 'toggle-shuffle':     toggleShuffle(); break;
             case 'open-speed-picker':  openSpeedPicker(); break;
             case 'open-track-menu':    openTrackMenu(); break;
             case 'close-track-menu':   closeTrackMenu(); break;
@@ -268,6 +270,7 @@
             case 'setting-subtitle-lang': openLangPicker('subtitleLang', 'Preferred subtitle language', LanguageList.forSubtitle()); break;
             case 'setting-repeat-mode':   openRepeatPicker(); break;
             case 'setting-auto-play':     openAutoPlayPicker(); break;
+            case 'setting-shuffle':       openShufflePicker(); break;
             case 'setting-subtitle-size':     openSubtitlePicker('subtitleSize',     'Subtitle size',       SubtitleStyle.forSize());     break;
             case 'setting-subtitle-font':     openSubtitlePicker('subtitleFont',     'Subtitle font',       SubtitleStyle.forFont());     break;
             case 'setting-subtitle-position': openSubtitlePicker('subtitlePosition', 'Subtitle position',   SubtitleStyle.forPosition()); break;
@@ -578,12 +581,34 @@
     }
 
     /* ── Playlist navigation (auto-play + next/prev) ──────────────── */
+    /* Fisher-Yates on a copy.  When shuffle is on we still put the user's
+     * clicked item at index 0 so playback starts with what they picked and
+     * only *subsequent* items are randomized — matches how music apps
+     * behave when you tap a specific track with shuffle enabled. */
+    function shufflePlaylist(list, keepFirstIdx) {
+        var out = list.slice();
+        for (var i = out.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var tmp = out[i]; out[i] = out[j]; out[j] = tmp;
+        }
+        if (keepFirstIdx >= 0 && keepFirstIdx < list.length) {
+            var pinned = list[keepFirstIdx];
+            var cur = out.indexOf(pinned);
+            if (cur > 0) { out[cur] = out[0]; out[0] = pinned; }
+        }
+        return out;
+    }
     function playFromList(origin, playlist, idx, dir) {
         state.origin        = origin;
         state.originDir     = dir;
-        state.playlist      = playlist || [];
-        state.playlistIndex = idx;
-        var item = state.playlist[idx];
+        if (Settings.get('shuffle') && playlist && playlist.length > 1) {
+            state.playlist      = shufflePlaylist(playlist, idx);
+            state.playlistIndex = 0;
+        } else {
+            state.playlist      = playlist || [];
+            state.playlistIndex = idx;
+        }
+        var item = state.playlist[state.playlistIndex];
         if (!item) return;
         playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
     }
@@ -811,6 +836,7 @@
         document.getElementById('setting-subtitle-lang-value').textContent = LanguageList.nameFor(Settings.get('subtitleLang'));
         document.getElementById('setting-repeat-mode-value').textContent   = (Settings.get('repeatMode') === 'one') ? 'Repeat one' : 'Off';
         document.getElementById('setting-auto-play-value').textContent     = Settings.get('autoPlay') ? 'On' : 'Off';
+        document.getElementById('setting-shuffle-value').textContent       = Settings.get('shuffle')  ? 'On' : 'Off';
         document.getElementById('setting-subtitle-size-value').textContent     = SubtitleStyle.nameForSize(Settings.get('subtitleSize'));
         document.getElementById('setting-subtitle-font-value').textContent     = SubtitleStyle.nameForFont(Settings.get('subtitleFont'));
         document.getElementById('setting-subtitle-position-value').textContent = SubtitleStyle.nameForPosition(Settings.get('subtitlePosition'));
@@ -979,6 +1005,48 @@
         var btn = document.getElementById('btn-repeat');
         if (!btn) return;
         btn.classList.toggle('repeat-on', Settings.get('repeatMode') === 'one');
+    }
+
+    /* ── Shuffle (issue #43) ──────────────────────────────────────────
+     * Randomize playlist order for folder + recent playback.  Toggling
+     * during playback re-shuffles the live playlist in place, keeping the
+     * currently-playing item at index 0 so the current file isn't yanked
+     * mid-play; turning it back off would ideally restore the alphabetical
+     * order, but the app doesn't retain the pre-shuffle list — restoring
+     * alphabetical requires re-entering the folder, which is a fair trade
+     * for keeping the state minimal. */
+    function openShufflePicker() {
+        pickerSetting = 'shuffle';
+        var cur = Settings.get('shuffle') ? 'on' : 'off';
+        openPicker('Shuffle playlist', [
+            { code: 'off', name: 'Off — folder order' },
+            { code: 'on',  name: 'On — random order within the folder' }
+        ], cur, function (val) {
+            applyShuffle(val === 'on');
+            refreshSettingsValues();
+            UI.toast('Shuffle: ' + (val === 'on' ? 'On' : 'Off'));
+        });
+    }
+    function toggleShuffle() {
+        var next = !Settings.get('shuffle');
+        applyShuffle(next);
+        UI.toast('Shuffle: ' + (next ? 'On' : 'Off'));
+    }
+    function applyShuffle(on) {
+        Settings.set('shuffle', !!on);
+        updateShuffleButton();
+        // If a playlist is live and shuffle just turned on, reshuffle
+        // the remaining items around the currently-playing one.
+        if (on && state.playlist.length > 1 && state.playlistIndex >= 0) {
+            state.playlist = shufflePlaylist(state.playlist, state.playlistIndex);
+            state.playlistIndex = 0;
+            updateNextPrevButtons();
+        }
+    }
+    function updateShuffleButton() {
+        var btn = document.getElementById('btn-shuffle');
+        if (!btn) return;
+        btn.classList.toggle('shuffle-on', !!Settings.get('shuffle'));
     }
 
     /* ── Track menu ───────────────────────────────────────────────── */
