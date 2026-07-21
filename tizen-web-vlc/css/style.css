@@ -437,6 +437,7 @@ button:focus { outline: none; }
     font-variant-numeric: tabular-nums;
     font-size: 22px;
     color: var(--fg);
+    position: relative;   /* anchors the floating scrub-delta label */
 }
 .time > * + * { margin-left: 24px; }
 .progress-track {
@@ -450,6 +451,23 @@ button:focus { outline: none; }
     height: 100%; width: 0%;
     background: var(--accent);
     transition: width .25s linear;
+}
+/* Scrub mode: the fill previews the seek destination, so it must track key
+ * repeats instantly (no easing) and read as "not the real position yet". */
+.progress-fill.scrubbing {
+    transition: none;
+    background: #fff;
+}
+/* Floats above the time row: it must NOT take part in the flex layout, or
+ * showing/hiding it resizes the progress track and the fill tip jumps
+ * sideways at commit even though the percentage is unchanged. */
+.scrub-delta {
+    position: absolute;
+    left: 0;
+    bottom: 100%;
+    margin: 0 0 10px;
+    color: var(--accent);
+    font-weight: 600;
 }
 
 .controls {

@@ -922,12 +922,33 @@ var Player = (function () {
             } catch (e) {}
         }
     }
-    function seekTo(ms) {
+    /* onDone (optional) fires when the seek actually completes — AVPlay
+     * seeks are asynchronous and can take seconds on network sources, and
+     * they land on a keyframe rather than the requested position, so
+     * callers that track the playhead can't infer completion from time
+     * samples alone.  Fires on failure too (there is nothing to wait for). */
+    function seekTo(ms, onDone) {
+        var fired = false;
+        var done = onDone ? function () {
+            if (fired) return;
+            fired = true;
+            onDone();
+        } : null;
         if (backend === BACKEND_HTML5) {
-            try { h5el().currentTime = Math.max(0, ms / 1000); } catch (e) {}
+            try {
+                var v = h5el();
+                if (done) v.addEventListener('seeked', function h() {
+                    v.removeEventListener('seeked', h);
+                    if (done) done();
+                });
+                v.currentTime = Math.max(0, ms / 1000);
+            } catch (e) { if (done) done(); }
         } else if (backend === BACKEND_AVPLAY) {
-            try { av().seekTo(Math.max(0, ms)); } catch (e) {}
-        }
+            try {
+                if (done) av().seekTo(Math.max(0, ms), done, done);
+                else      av().seekTo(Math.max(0, ms));
+            } catch (e) { if (done) done(); }
+        } else if (done) done();
     }
     function currentTime() {
         if (backend === BACKEND_HTML5)    return (h5el().currentTime || 0) * 1000;
