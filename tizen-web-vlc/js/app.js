@@ -59,6 +59,8 @@
     }
     function markWatched(uri) {
         if (!uri) return;
+        // A finished file should start from the beginning next time.
+        clearResumePos(uri);
         var w = getWatched();
         if (w[uri]) return;
         w[uri] = Date.now();
@@ -70,6 +72,51 @@
                 .forEach(function (k) { delete w[k]; });
         }
         try { localStorage.setItem(WATCHED_KEY, JSON.stringify(w)); } catch (e) {}
+    }
+
+    /* ── Resume positions (localStorage map uri → {pos, dur, ts}) ─────
+     * Lets a reopened file continue from where the user left off.  The
+     * position is checkpointed every few seconds while playing (so it
+     * survives a power-off where exitPlayer never runs) and saved on
+     * exit / standby.  It's cleared once the file counts as watched
+     * (oncomplete or ≥ 90 %) so finished files restart from zero. */
+    var RESUME_KEY = 'vlctv_resume_v1';
+    var RESUME_MIN_MS = 30000;   // positions in the first 30 s aren't worth resuming
+    function getResumeMap() {
+        try { return JSON.parse(localStorage.getItem(RESUME_KEY) || '{}'); }
+        catch (e) { return {}; }
+    }
+    function setResumeMap(m) {
+        try { localStorage.setItem(RESUME_KEY, JSON.stringify(m)); } catch (e) {}
+    }
+    function resumePosFor(uri) {
+        if (!uri) return 0;
+        var r = getResumeMap()[uri];
+        return (r && r.pos > RESUME_MIN_MS) ? r.pos : 0;
+    }
+    function saveResumePos(uri, timeMs, durMs) {
+        if (!uri) return;
+        var m = getResumeMap();
+        if (!timeMs || timeMs < RESUME_MIN_MS) {
+            // Stopped near the start: drop any stale position so the next
+            // open starts clean instead of jumping to an old spot.
+            if (m[uri]) { delete m[uri]; setResumeMap(m); }
+            return;
+        }
+        m[uri] = { pos: Math.floor(timeMs), dur: Math.floor(durMs || 0), ts: Date.now() };
+        // Cap growth: drop the oldest entries once we pass 200.
+        var keys = Object.keys(m);
+        if (keys.length > 200) {
+            keys.sort(function (a, b) { return m[a].ts - m[b].ts; })
+                .slice(0, keys.length - 200)
+                .forEach(function (k) { delete m[k]; });
+        }
+        setResumeMap(m);
+    }
+    function clearResumePos(uri) {
+        if (!uri) return;
+        var m = getResumeMap();
+        if (m[uri]) { delete m[uri]; setResumeMap(m); }
     }
 
     /* ── State ────────────────────────────────────────────────────── */
@@ -89,6 +136,8 @@
     };
     // Latest progress sample, used to decide partial-watch → watched on exit.
     var lastProgress = { time: 0, duration: 0 };
+    // Throttle for the periodic resume-position checkpoint.
+    var lastResumeSaveAt = 0;
 
     /* When the TV goes to standby, Tizen suspends the WebView.  AVPlay does
      * NOT survive this cleanly: on wake the session comes back with A/V
@@ -164,8 +213,11 @@
                     if (typeof Debug !== 'undefined')
                         Debug.player('standby-resume: seekTo=' + pr.pos + ' paused=' + pr.paused);
                     try {
-                        if (pr.pos > 1500) Player.seekTo(pr.pos);
-                        if (pr.paused)     Player.pause();
+                        if (pr.pos > 1500) {
+                            Player.seekTo(pr.pos);
+                            if (pr.announce) UI.toast('Resumed from ' + fmtTime(pr.pos));
+                        }
+                        if (pr.paused) Player.pause();
                     } catch (e) {}
                 }
             }
@@ -189,6 +241,13 @@
         Player.setListener('onprogress', function (p) {
             lastProgress = { time: (p && p.time) || 0, duration: (p && p.duration) || 0 };
             updateProgress(p && p.time, p && p.duration);
+            // Checkpoint the position every 5 s so it survives a power-off
+            // or app kill where exitPlayer never gets a chance to run.
+            if (state.playingUri && lastProgress.time >= RESUME_MIN_MS &&
+                Date.now() - lastResumeSaveAt > 5000) {
+                lastResumeSaveAt = Date.now();
+                saveResumePos(state.playingUri, lastProgress.time, lastProgress.duration);
+            }
         });
         Player.setListener('oncomplete', function () {
             if (Settings.get('repeatMode') === 'one' && state.playingUri) {
@@ -496,14 +555,19 @@
             };
             if (typeof Debug !== 'undefined')
                 Debug.player('visibility=hidden: snapshot pos=' + standbySnapshot.pos + 'ms paused=' + standbySnapshot.paused);
+            // Persist the exact position too — if the TV never wakes back
+            // into the app, the next launch still resumes from here.
+            saveResumePos(state.playingUri, standbySnapshot.pos, lastProgress.duration);
             try { Player.stop(); } catch (e) {}
         } else if (document.visibilityState === 'visible') {
             if (!standbySnapshot) return;
             var ss = standbySnapshot; standbySnapshot = null;
             if (typeof Debug !== 'undefined')
                 Debug.player('visibility=visible: restoring ' + ss.uri + ' at ' + ss.pos + 'ms');
-            pendingResume = { pos: ss.pos, paused: ss.paused };
-            playUri(ss.uri, ss.title, { subtitles: ss.subtitles });
+            playUri(ss.uri, ss.title, {
+                subtitles: ss.subtitles,
+                resume:    { pos: ss.pos, paused: ss.paused }
+            });
         }
     }
 
@@ -516,6 +580,21 @@
         // the new file (and not for the previous file).
         prefsAppliedFor = null;
         lastProgress = { time: 0, duration: 0 };
+        lastResumeSaveAt = 0;
+
+        /* Seek-once-playing (applied in the onstatechange('playing')
+         * handler): a standby wake passes an explicit resume point via
+         * opts.resume; otherwise fall back to the persisted last-watched
+         * position so a reopened file continues where the user left off.
+         * Always assigned, so a stale pendingResume from a restore that
+         * never reached PLAYING can't leak into the next file. */
+        if (opts.resume) {
+            pendingResume = { pos: opts.resume.pos, paused: opts.resume.paused };
+        } else {
+            var resumeAt = resumePosFor(uri);
+            pendingResume = resumeAt ? { pos: resumeAt, paused: false, announce: true } : null;
+        }
+
         state.playingUri = uri;
         state.playingTitle = title || uri;
         updateNextPrevButtons();
@@ -641,9 +720,13 @@
     /* Leave the player and return to the menu playback was launched from,
      * rather than always jumping back to the home screen. */
     function exitPlayer() {
-        // Watched ≥ 90 % counts as seen even if the user stops before the end.
+        // Watched ≥ 90 % counts as seen even if the user stops before the end
+        // (markWatched also drops the resume position); anything short of
+        // that keeps its position so the file can pick up where it left off.
         if (lastProgress.duration && lastProgress.time / lastProgress.duration >= 0.9)
             markWatched(state.playingUri);
+        else if (lastProgress.time > 0)   // time===0 → playback never started;
+            saveResumePos(state.playingUri, lastProgress.time, lastProgress.duration);
 
         Player.stop();
         hideError();
