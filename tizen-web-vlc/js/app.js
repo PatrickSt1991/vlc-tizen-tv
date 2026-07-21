@@ -82,6 +82,13 @@
      * (oncomplete or ≥ 90 %) so finished files restart from zero. */
     var RESUME_KEY = 'vlctv_resume_v1';
     var RESUME_MIN_MS = 30000;   // positions in the first 30 s aren't worth resuming
+    /* Aim the resume seek this far BEFORE the saved position.  AVPlay can
+     * only land on keyframes and rounds the seek target forward to the
+     * next one (~5-6 s GOPs are typical), so an exact-target seek ends up
+     * PAST where the user left off.  Backing off 10 s makes the snap land
+     * at or just before the exit point — replaying a few seconds of
+     * context instead of silently skipping content. */
+    var RESUME_BACKOFF_MS = 10000;
     function getResumeMap() {
         try { return JSON.parse(localStorage.getItem(RESUME_KEY) || '{}'); }
         catch (e) { return {}; }
@@ -592,7 +599,9 @@
             pendingResume = { pos: opts.resume.pos, paused: opts.resume.paused };
         } else {
             var resumeAt = resumePosFor(uri);
-            pendingResume = resumeAt ? { pos: resumeAt, paused: false, announce: true } : null;
+            pendingResume = resumeAt
+                ? { pos: Math.max(0, resumeAt - RESUME_BACKOFF_MS), paused: false, announce: true }
+                : null;
         }
 
         state.playingUri = uri;
