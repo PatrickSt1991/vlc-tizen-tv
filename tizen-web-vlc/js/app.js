@@ -247,7 +247,17 @@
         });
         Player.setListener('onprogress', function (p) {
             lastProgress = { time: (p && p.time) || 0, duration: (p && p.duration) || 0 };
-            updateProgress(p && p.time, p && p.duration);
+            // A committed scrub seek stays "waiting" until the playhead
+            // lands near its target (async AVPlay seeks report the pre-seek
+            // position for a while), with a timeout for failed seeks.
+            if (scrub.waiting && !scrub.active &&
+                (Math.abs(lastProgress.time - scrub.pos) <= SCRUB_SETTLE_TOL_MS ||
+                 Date.now() - scrub.commitAt > SCRUB_SETTLE_MAX_MS))
+                scrub.waiting = false;
+            // While scrubbing or settling, the bar shows the preview
+            // position, not the real playhead.
+            if (!scrub.active && !scrub.waiting)
+                updateProgress(p && p.time, p && p.duration);
             // Checkpoint the position every 5 s so it survives a power-off
             // or app kill where exitPlayer never gets a chance to run.
             if (state.playingUri && lastProgress.time >= RESUME_MIN_MS &&
@@ -588,6 +598,8 @@
         prefsAppliedFor = null;
         lastProgress = { time: 0, duration: 0 };
         lastResumeSaveAt = 0;
+        resetScrub();          // a scrub/settle from the previous file must
+                               // not freeze the new file's progress bar
 
         /* Seek-once-playing (applied in the onstatechange('playing')
          * handler): a standby wake passes an explicit resume point via
@@ -737,6 +749,7 @@
         else if (lastProgress.time > 0)   // time===0 → playback never started;
             saveResumePos(state.playingUri, lastProgress.time, lastProgress.duration);
 
+        resetScrub();
         Player.stop();
         hideError();
         document.getElementById('osd-top').classList.add('hidden');
@@ -757,6 +770,7 @@
 
     function backToHome() {
         if (typeof Debug !== 'undefined') Debug.view('home');
+        resetScrub();
         Player.stop();
         state.view = 'home';
         UI.showView('view-home');
@@ -787,6 +801,131 @@
         osdHideTimer = setTimeout(function () { showOSD(false); }, 5000);
     }
     function flashOSD() { showOSD(true); scheduleOSDHide(); }
+
+    /* ── Fast seeking / scrub mode (issue: percentage-based seeking) ──
+     * Left/Right and RW/FF no longer fire a real seek per press.  They move
+     * a preview position along the progress bar, and the seek is committed
+     * only after the keys go quiet for a moment (or instantly on OK).  Held
+     * or rapid presses accelerate from the familiar 10 s step up to
+     * duration-relative jumps (1–2 % of the file), so crossing a 3-hour
+     * movie takes seconds while a couple of taps still nudge by 10 s.
+     * BACK cancels a scrub without seeking.  Files with no known duration
+     * (live streams) keep the old immediate fixed-step seek. */
+    var scrub = { active: false, waiting: false, pos: 0, dir: 0, steps: 0, timer: null, commitAt: 0 };
+    var SCRUB_COMMIT_MS = 600;   // quiet time before the preview position is seeked
+    // AVPlay's seekTo is asynchronous: getCurrentTime() keeps reporting the
+    // PRE-seek playhead until the pipeline flushes — seconds, on SMB/network
+    // streams.  So after committing we keep painting the preview position
+    // (scrub.waiting) until a progress sample lands near the target, with a
+    // hard timeout in case the seek silently fails.
+    var SCRUB_SETTLE_TOL_MS = 4000;
+    var SCRUB_SETTLE_MAX_MS = 10000;
+
+    function scrubStepSize(n, durMs, baseMs) {
+        // n = consecutive steps in one direction within this scrub session.
+        // A session ends after SCRUB_COMMIT_MS of silence, so slow discrete
+        // presses never accelerate — only holds / rapid taps do.
+        var ms;
+        if      (n <= 3)  ms = 10000;
+        else if (n <= 8)  ms = 30000;
+        else if (n <= 15) ms = Math.max(60000,  durMs * 0.01);
+        else              ms = Math.max(120000, durMs * 0.02);
+        return Math.max(baseMs, ms);
+    }
+
+    function scrubStep(dir, baseMs) {
+        var dur = Player.duration() || lastProgress.duration;
+        if (!dur || dur <= 0) {              // duration unknown → seek directly
+            Player.seekRel(dir * baseMs);
+            flashOSD();
+            return;
+        }
+        if (!scrub.active) {
+            scrub.active = true;
+            // If a committed seek is still in flight, currentTime() is stale
+            // (pre-seek) — continue from the target we already committed to.
+            if (!scrub.waiting)
+                scrub.pos = Player.currentTime() || lastProgress.time;
+            scrub.dir    = 0;
+            scrub.steps  = 0;
+        }
+        if (dir !== scrub.dir) { scrub.dir = dir; scrub.steps = 0; }
+        scrub.steps++;
+        scrub.pos = Math.max(0, Math.min(dur - 1000,
+                        scrub.pos + dir * scrubStepSize(scrub.steps, dur, baseMs)));
+        updateProgress(scrub.pos, dur);
+        updateScrubUI(true, scrub.pos);
+        // Pin the OSD while scrubbing; the hide timer restarts on commit.
+        showOSD(true);
+        clearTimeout(osdHideTimer);
+        clearTimeout(scrub.timer);
+        scrub.timer = setTimeout(commitScrub, SCRUB_COMMIT_MS);
+    }
+
+    function commitScrub() {
+        if (!scrub.active) return;
+        clearTimeout(scrub.timer);
+        scrub.active = false;
+        scrub.steps  = 0;
+        scrubSeekTo(scrub.pos);
+        updateScrubUI(false);
+        flashOSD();
+    }
+
+    /* Seek and keep painting `ms` on the bar until the seek completes.
+     * Shared by scrub commits and 0-9 jumps.  Completion comes from
+     * Player.seekTo's callback — AVPlay lands on a keyframe, possibly tens
+     * of seconds from the target, so distance-to-target can't detect it
+     * (SCRUB_SETTLE_* in onprogress remain as backstops in case a firmware
+     * never fires the callback).  The seq token keeps a late callback from
+     * an overridden seek from unfreezing a newer one still in flight. */
+    function scrubSeekTo(ms) {
+        scrub.pos      = ms;
+        scrub.waiting  = true;
+        scrub.commitAt = Date.now();
+        scrub.seq      = (scrub.seq || 0) + 1;
+        var seq = scrub.seq;
+        Player.seekTo(ms, function () {
+            if (seq !== scrub.seq || !scrub.waiting) return;
+            scrub.waiting = false;
+            if (!scrub.active)
+                updateProgress(Player.currentTime(), Player.duration() || lastProgress.duration);
+        });
+        updateProgress(ms, Player.duration() || lastProgress.duration);
+    }
+
+    function cancelScrub(restoreBar) {
+        clearTimeout(scrub.timer);
+        scrub.active = false;
+        scrub.steps  = 0;
+        updateScrubUI(false);
+        if (restoreBar) {
+            // A still-settling earlier commit means the bar should show its
+            // target, not the stale pre-seek playhead.
+            if (scrub.waiting) updateProgress(scrub.pos, Player.duration() || lastProgress.duration);
+            else               updateProgress(lastProgress.time, lastProgress.duration);
+            flashOSD();
+        }
+    }
+
+    /* Full reset — leaving the player or starting a new file.  Unlike
+     * cancelScrub this also drops the settle-wait, which would otherwise
+     * suppress the next file's progress updates. */
+    function resetScrub() {
+        cancelScrub(false);
+        scrub.waiting  = false;
+        scrub.commitAt = 0;
+    }
+
+    function updateScrubUI(on, posMs) {
+        document.getElementById('progress-fill').classList.toggle('scrubbing', !!on);
+        var delta = document.getElementById('time-scrub-delta');
+        if (!delta) return;
+        if (!on) { delta.classList.add('hidden'); return; }
+        var d = posMs - lastProgress.time;
+        delta.textContent = (d < 0 ? '−' : '+') + fmtTime(Math.abs(d));
+        delta.classList.remove('hidden');
+    }
 
     function installMediaSessionHandlers() {
         if (!('mediaSession' in navigator)) return;
@@ -1245,14 +1384,16 @@
         var osdVisible = !document.getElementById('osd-bottom').classList.contains('hidden');
 
         switch (code) {
-            // Player view key mapping (issue #28 part 2):
+            // Player view key mapping (issue #28 part 2 + fast seeking):
             //   Up/Down  → cycle between OSD buttons (no-op when OSD hidden,
             //              just brings it up)
-            //   Left     → seek backward 10 s, keep OSD up
-            //   Right    → seek forward  10 s, keep OSD up
-            //   FF/RW    → still ±30 s on dedicated media keys
-            // The 10 s step matches YouTube-on-TV's D-pad scrubbing rate and
-            // is fine-grained enough that users don't overshoot a few seconds.
+            //   Left     → scrub backward (starts at 10 s, accelerates when
+            //              held/tapped rapidly, up to 1–2 % of the duration)
+            //   Right    → scrub forward, same acceleration
+            //   FF/RW    → same scrub with a 30 s floor
+            // Scrub steps only preview on the progress bar; the real seek is
+            // committed after a short pause in input, or instantly on OK.
+            // BACK during a scrub cancels it without seeking.
             case K.UP:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
                     if (!osdVisible) { flashOSD(); return true; }
@@ -1281,15 +1422,13 @@
                 return true;
             case K.LEFT:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
-                    Player.seekRel(-10000);
-                    flashOSD();   // keeps the OSD up while scrubbing
+                    scrubStep(-1, 10000);
                     return true;
                 }
                 UI.moveFocus('left');  return true;
             case K.RIGHT:
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
-                    Player.seekRel(+10000);
-                    flashOSD();
+                    scrubStep(+1, 10000);
                     return true;
                 }
                 UI.moveFocus('right'); return true;
@@ -1298,6 +1437,7 @@
                 // is up (so Stop / CC-Audio / etc. are reachable).  If the OSD
                 // is hidden, OK just brings it up.
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
+                    if (scrub.active) { commitScrub(); return true; }
                     if (!osdVisible) { flashOSD(); return true; }
                     if (!UI.activateFocused()) flashOSD();
                     return true;
@@ -1308,6 +1448,7 @@
                 if (trackMenuOpen)              { closeTrackMenu();  return true; }
                 if (errorUp)                    { backToHome();      return true; }
                 if (state.view === 'browse')    { browseUp();        return true; }
+                if (state.view === 'player' && scrub.active) { cancelScrub(true); return true; }
                 if (state.view === 'player')    { exitPlayer();      return true; }
                 if (state.view === 'url')       { backToHome();      return true; }
                 if (state.view === 'settings')  { backToHome();      return true; }
@@ -1315,16 +1456,19 @@
             case K.PLAY:
             case K.PAUSE:
             case K.PLAYPAUSE:
-                if (state.view === 'player') { Player.togglePause(); flashOSD(); return true; }
+                if (state.view === 'player') {
+                    if (scrub.active) commitScrub();
+                    Player.togglePause(); flashOSD(); return true;
+                }
                 return false;
             case K.STOP:
                 if (state.view === 'player') { exitPlayer(); return true; }
                 return false;
             case K.REWIND:
-                if (state.view === 'player') { Player.seekRel(-30000); flashOSD(); return true; }
+                if (state.view === 'player') { scrubStep(-1, 30000); return true; }
                 return false;
             case K.FF:
-                if (state.view === 'player') { Player.seekRel( 30000); flashOSD(); return true; }
+                if (state.view === 'player') { scrubStep(+1, 30000); return true; }
                 return false;
         }
         return false;
