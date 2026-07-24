@@ -482,7 +482,7 @@
             // that auto-play and next/prev walk through.
             var playlist = entries
                 .filter(function (e) { return e.playable; })
-                .map(function (e) { return { uri: e.uri, title: e.name, subtitles: e.subtitles }; });
+                .map(function (e) { return { uri: e.uri, title: e.name, subtitles: e.subtitles, file: e.file }; });
 
             entries.forEach(function (e) {
                 if (e.isDir === false && !e.playable) return; // hide non-media files
@@ -567,6 +567,9 @@
                 uri:       state.playingUri,
                 title:     state.playingTitle,
                 subtitles: subs,
+                // Preserve the live Tizen File object for standby resumes;
+                // it carries size/path APIs used by incremental extraction.
+                file:      cur && cur.file ? cur.file : null,
                 pos:       Player.currentTime() || 0,
                 paused:    Player.state() === 'PAUSED'
             };
@@ -583,6 +586,7 @@
                 Debug.player('visibility=visible: restoring ' + ss.uri + ' at ' + ss.pos + 'ms');
             playUri(ss.uri, ss.title, {
                 subtitles: ss.subtitles,
+                file:      ss.file,
                 resume:    { pos: ss.pos, paused: ss.paused }
             });
         }
@@ -635,7 +639,8 @@
         setTimeout(function () {
             Player.open(uri, {
                 title:     title,
-                subtitles: opts.subtitles || []
+                subtitles: opts.subtitles || [],
+                file:      opts.file || null
             });
         }, 50);
 
@@ -710,7 +715,7 @@
         }
         var item = state.playlist[state.playlistIndex];
         if (!item) return;
-        playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+        playUri(item.uri, item.title, { subtitles: item.subtitles || [], file: item.file || null });
     }
     function playNext(isAuto) {
         var ni = state.playlistIndex + 1;
@@ -718,7 +723,7 @@
         var item = state.playlist[ni];
         state.playlistIndex = ni;
         if (isAuto) UI.toast('Up next: ' + item.title);
-        playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+        playUri(item.uri, item.title, { subtitles: item.subtitles || [], file: item.file || null });
         return true;
     }
     function playPrev() {
@@ -726,7 +731,7 @@
         var pi = state.playlistIndex - 1;
         var item = state.playlist[pi];
         state.playlistIndex = pi;
-        playUri(item.uri, item.title, item.subtitles ? { subtitles: item.subtitles } : undefined);
+        playUri(item.uri, item.title, { subtitles: item.subtitles || [], file: item.file || null });
         return true;
     }
     /* Dim the prev/next OSD buttons when there's nothing on that side. */

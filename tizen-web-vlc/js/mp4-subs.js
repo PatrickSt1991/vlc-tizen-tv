@@ -8,9 +8,16 @@
  * each text-subtitle track to its own SRT in wgt-private-tmp, and treat
  * those generated SRTs as if they were external siblings.
  *
- * Codecs supported: tx3g (3GPP timed text) and mov_text (MP4 text).
+ * Codecs supported: tx3g (3GPP timed text) and mov_text / text tracks.
  * Sample format for both: u16be length + UTF-8 text.  Modifier boxes
  * after the text (style, colour, etc.) are skipped.
+ *
+ * Large-file flow:
+ *   1. Open a generic range reader for the local file.
+ *   2. Walk top-level MP4 boxes by declared size until moov is found.
+ *   3. Parse moov track/sample tables to locate supported text tracks.
+ *   4. Range-read only subtitle samples and append cues to live tracks.
+ * This keeps memory bounded by metadata/sample size, not movie size.
  */
 
 var Mp4Subs = (function () {
@@ -298,14 +305,11 @@ var Mp4Subs = (function () {
      *   file: a Tizen File object (with .toURI()) OR a string file URI
      *   cb:   function(err, [{id, lang, cues, srt}])
      *
-     * Reads the whole file as ArrayBuffer via XHR.  For large files we could
-     * later switch to Range-request partial reads, but for ≤2 GB MP4s this
-     * is simple and correct. */
-    /* Hard cap on whole-file loading.  Anything bigger gets skipped — we'd
-     * blow the TV's RAM trying to ArrayBuffer a 4 GB movie.  Proper fix is
-     * Range-based partial reads (moov + per-sample mdat ranges) but that
-     * needs to be validated against Tizen Chromium's file:// behaviour
-     * first.  TODO: implement partial reads. */
+     * Reads the whole file as ArrayBuffer via XHR. Kept for compatibility
+     * with small-file callers; Player uses extractIncremental() when it can
+     * pass a local Tizen File object. */
+    /* Hard cap on whole-file loading. Anything bigger gets skipped here;
+     * large local files should use extractIncremental() instead. */
     var MAX_FULL_LOAD_BYTES = 200 * 1024 * 1024;       // 200 MB
 
     function extract(file, cb) {
@@ -344,6 +348,890 @@ var Mp4Subs = (function () {
             if (!aborted) cb(new Error('XHR failed loading ' + uri));
         };
         xhr.send();
+    }
+
+    /* ── Incremental local-file extractor ────────────────────────────── */
+
+    var DEFAULT_CHUNK_BYTES = 4 * 1024 * 1024;
+    var DEFAULT_INTERNAL_READ_BYTES = 256 * 1024;
+    var DEFAULT_MAX_MOOV_BYTES = 64 * 1024 * 1024;
+    var DEFAULT_MAX_SAMPLE_BYTES = 2 * 1024 * 1024;
+    var DEFAULT_MAX_TAIL_SEARCH_BYTES = 512 * 1024 * 1024;
+    var DEFAULT_TAIL_SEARCH_CHUNK_BYTES = 64 * 1024;
+    var DEFAULT_XHR_RANGE_TIMEOUT_MS = 30000;
+    var MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+    var MIN_CHUNK_BYTES = 64 * 1024;
+    var MIN_INTERNAL_READ_BYTES = 16 * 1024;
+    var MP4_HEADER_READ_BYTES = 16;
+    var SAFE_TIZEN_SEEK_STEP_BYTES = 1024 * 1024 * 1024;
+    var TAIL_SEARCH_OVERLAP_BYTES = 32;
+
+    function later(fn) {
+        setTimeout(fn, 0);
+    }
+
+    function log(message) {
+        if (typeof Debug !== 'undefined') Debug.player('MP4 sub scan: ' + message);
+    }
+
+    function warn(message) {
+        if (typeof Debug !== 'undefined') Debug.warn('MP4 sub scan: ' + message);
+    }
+
+    function filePathOf(file) {
+        if (file && file.fullPath) return file.fullPath;
+
+        var path = String(file || '');
+        if (path.indexOf('file://') === 0) path = path.slice(7);
+
+        try { path = decodeURIComponent(path); } catch (e) {}
+        return path;
+    }
+
+    function isValidRange(offset, length, size) {
+        return Number.isSafeInteger(offset) &&
+               Number.isSafeInteger(length) &&
+               offset >= 0 &&
+               length >= 0 &&
+               offset <= size;
+    }
+
+    // Wrap Tizen's newer openFile()/FileHandle API in the generic range-reader
+    // interface used by the incremental MP4 parser.
+    function makeModernReader(handle, size, internalReadSize) {
+        var closed = false;
+        var position = 0;
+        var positionKnown = false;
+
+        function seekTo(offset) {
+            if (!Number.isSafeInteger(offset) || offset < 0 || offset > size) {
+                throw Error('invalid seek offset');
+            }
+
+            if (positionKnown && offset === position) return;
+
+            var canSeekForwardFromHere = positionKnown &&
+                                         offset > position &&
+                                         offset - position <= SAFE_TIZEN_SEEK_STEP_BYTES;
+            if (!canSeekForwardFromHere) {
+                if (offset <= SAFE_TIZEN_SEEK_STEP_BYTES) {
+                    handle.seek(offset, 'BEGIN');
+                    position = offset;
+                    positionKnown = true;
+                    return;
+                }
+
+                handle.seek(0, 'BEGIN');
+                position = 0;
+                positionKnown = true;
+            }
+
+            var remaining = offset - position;
+            while (remaining > 0) {
+                var step = Math.min(remaining, SAFE_TIZEN_SEEK_STEP_BYTES);
+                handle.seek(step, 'CURRENT');
+                position += step;
+                remaining -= step;
+            }
+        }
+
+        return {
+            implementation: 'Tizen FileHandle (chunked seek)',
+
+            getSize: function (cb) {
+                later(function () { cb(null, size); });
+            },
+
+            readRange: function (offset, length, cb) {
+                if (closed || !isValidRange(offset, length, size)) {
+                    later(function () { cb(Error('invalid/closed range')); });
+                    return;
+                }
+
+                length = Math.min(length, size - offset);
+                var out = new Uint8Array(length);
+                var written = 0;
+
+                try {
+                    seekTo(offset);
+                } catch (e) {
+                    positionKnown = false;
+                    cb(e);
+                    return;
+                }
+
+                function readNextPart() {
+                    if (closed) {
+                        cb(Error('reader closed'));
+                        return;
+                    }
+                    if (written === length) {
+                        cb(null, out.buffer);
+                        return;
+                    }
+
+                    var take = Math.min(internalReadSize, length - written);
+
+                    function appendChunk(chunk) {
+                        chunk = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk || []);
+                        if (!chunk.length) {
+                            cb(Error('unexpected EOF'));
+                            return;
+                        }
+
+                        var copied = Math.min(chunk.length, take);
+                        out.set(chunk.subarray(0, copied), written);
+                        written += copied;
+                        position += copied;
+                        positionKnown = true;
+                        later(readNextPart);
+                    }
+
+                    try {
+                        if (handle.readDataNonBlocking) {
+                            handle.readDataNonBlocking(appendChunk, cb, take);
+                        } else {
+                            appendChunk(handle.readData(take));
+                        }
+                    } catch (e) {
+                        cb(e);
+                    }
+                }
+
+                later(readNextPart);
+            },
+
+            close: function () {
+                if (closed) return;
+                closed = true;
+                try { handle.close(); } catch (e) {}
+            }
+        };
+    }
+
+    // Prefer browser byte-range requests for file:// URIs when available;
+    // they can read large-file offsets without loading the whole movie.
+    function makeXhrRangeReader(uri, size, timeoutMs) {
+        return {
+            implementation: 'XHR Range',
+
+            getSize: function (cb) {
+                later(function () { cb(null, size); });
+            },
+
+            readRange: function (offset, length, cb) {
+                if (!isValidRange(offset, length, size)) {
+                    later(function () { cb(Error('invalid range')); });
+                    return;
+                }
+                if (!length) {
+                    later(function () { cb(null, new ArrayBuffer(0)); });
+                    return;
+                }
+
+                length = Math.min(length, size - offset);
+
+                var xhr = new XMLHttpRequest();
+                var aborted = false;
+                var maxAcceptedLoad = Math.max(length + 65536, 1024 * 1024);
+
+                function fail(err) {
+                    if (aborted) return;
+                    aborted = true;
+                    try { xhr.abort(); } catch (e) {}
+                    cb(err instanceof Error ? err : Error(String(err)));
+                }
+
+                try {
+                    xhr.open('GET', uri, true);
+                    xhr.timeout = timeoutMs;
+                    xhr.responseType = 'arraybuffer';
+                    xhr.setRequestHeader('Range', 'bytes=' + offset + '-' + (offset + length - 1));
+                } catch (e) {
+                    fail(e);
+                    return;
+                }
+
+                xhr.onprogress = function (e) {
+                    if (aborted) return;
+
+                    if (e && e.lengthComputable && e.total > maxAcceptedLoad) {
+                        fail(Error('XHR range ignored; response total=' + e.total +
+                                   ' requested=' + length));
+                    } else if (e && e.loaded > maxAcceptedLoad) {
+                        fail(Error('XHR range exceeded bounded read; loaded=' + e.loaded +
+                                   ' requested=' + length));
+                    }
+                };
+                xhr.onload = function () {
+                    if (aborted) return;
+
+                    var buffer = xhr.response;
+                    if (!buffer) {
+                        fail(Error('empty XHR range response'));
+                        return;
+                    }
+
+                    if (buffer.byteLength !== length) {
+                        fail(Error('XHR range returned ' + buffer.byteLength +
+                                   ' bytes for requested ' + length));
+                        return;
+                    }
+
+                    cb(null, buffer);
+                };
+                xhr.onerror = function () {
+                    fail(Error('XHR range failed'));
+                };
+                xhr.ontimeout = function () {
+                    fail(Error('XHR range timed out'));
+                };
+                xhr.send();
+            },
+
+            close: function () {}
+        };
+    }
+
+    // Fallback for older Tizen FileStream objects. It is limited to 32-bit
+    // offsets, so it can only serve small/local files safely.
+    function makeLegacyReader(stream, size, internalReadSize) {
+        var closed = false;
+
+        return {
+            implementation: 'Tizen FileStream (legacy)',
+
+            getSize: function (cb) {
+                later(function () { cb(null, size); });
+            },
+
+            readRange: function (offset, length, cb) {
+                if (offset > 0x7fffffff) {
+                    later(function () { cb(Error('legacy FileStream cannot address offsets above 2 GiB')); });
+                    return;
+                }
+                if (closed || !isValidRange(offset, length, size)) {
+                    later(function () { cb(Error('invalid/closed range')); });
+                    return;
+                }
+
+                length = Math.min(length, size - offset);
+                var out = new Uint8Array(length);
+                var written = 0;
+
+                try {
+                    stream.position = offset;
+                } catch (e) {
+                    cb(e);
+                    return;
+                }
+
+                function readNextPart() {
+                    if (closed) {
+                        cb(Error('reader closed'));
+                        return;
+                    }
+                    if (written === length) {
+                        cb(null, out.buffer);
+                        return;
+                    }
+
+                    try {
+                        var chunk = stream.readBytes(Math.min(internalReadSize, length - written));
+                        if (!chunk.length) {
+                            cb(Error('unexpected EOF'));
+                            return;
+                        }
+
+                        out.set(chunk, written);
+                        written += chunk.length;
+                        later(readNextPart);
+                    } catch (e) {
+                        cb(e);
+                    }
+                }
+
+                later(readNextPart);
+            },
+
+            close: function () {
+                if (closed) return;
+                closed = true;
+                try { stream.close(); } catch (e) {}
+            }
+        };
+    }
+
+    function openIncrementalReader(file, options, cb) {
+        if (file && file.readRange && file.getSize) {
+            later(function () { cb(null, file); });
+            return;
+        }
+
+        if (typeof tizen === 'undefined' || !tizen.filesystem) {
+            later(function () { cb(Error('Tizen filesystem unavailable')); });
+            return;
+        }
+
+        var path = filePathOf(file);
+        var uri = file && typeof file.toURI === 'function' ? file.toURI() : String(file || '');
+        var size = file && Number(file.fileSize);
+        var internalReadSize = Math.min(options.internalReadSize, options.chunkSize);
+
+        function tryXhrRangeReader(onUnavailable) {
+            if (typeof XMLHttpRequest === 'undefined' || !uri || uri.indexOf('file://') !== 0 ||
+                !Number.isSafeInteger(size)) {
+                onUnavailable();
+                return;
+            }
+
+            var xhrReader = makeXhrRangeReader(uri, size, options.xhrRangeTimeoutMs);
+            xhrReader.readRange(0, MP4_HEADER_READ_BYTES, function (err, buffer) {
+                if (!err && buffer && buffer.byteLength === MP4_HEADER_READ_BYTES) {
+                    cb(null, xhrReader);
+                    return;
+                }
+
+                onUnavailable();
+            });
+        }
+
+        function openTizenReader(resolvedFile) {
+            if (tryModernReader()) return;
+
+            if (resolvedFile) {
+                openLegacyReader(resolvedFile);
+            } else if (file && file.openStream) {
+                openLegacyReader(file);
+            } else {
+                cb(Error('no usable local file reader'));
+            }
+        }
+
+        function tryModernReader() {
+            if (!tizen.filesystem.openFile) return false;
+            if (!Number.isSafeInteger(size)) return false;
+
+            var handle;
+            try {
+                handle = tizen.filesystem.openFile(path, 'r');
+            } catch (e) {
+                return false;
+            }
+
+            cb(null, makeModernReader(handle, size, internalReadSize));
+            return true;
+        }
+
+        function openLegacyReader(resolvedFile) {
+            size = Number(resolvedFile.fileSize);
+            try {
+                resolvedFile.openStream(
+                    'r',
+                    function (stream) { cb(null, makeLegacyReader(stream, size, internalReadSize)); },
+                    cb
+                );
+            } catch (e) {
+                cb(e);
+            }
+        }
+
+        if (Number.isSafeInteger(size)) {
+            tryXhrRangeReader(function () { openTizenReader(file && file.openStream ? file : null); });
+            return;
+        }
+
+        try {
+            tizen.filesystem.resolve(
+                path,
+                function (resolvedFile) {
+                    size = Number(resolvedFile.fileSize);
+                    path = resolvedFile.fullPath;
+                    if (typeof resolvedFile.toURI === 'function') uri = resolvedFile.toURI();
+
+                    tryXhrRangeReader(function () { openTizenReader(resolvedFile); });
+                },
+                cb,
+                'r'
+            );
+        } catch (e) {
+            cb(e);
+        }
+    }
+
+    function normalizeIncrementalOptions(handlerOptions) {
+        var chunkSize = Math.max(
+            MIN_CHUNK_BYTES,
+            Math.min(handlerOptions.chunkSize || DEFAULT_CHUNK_BYTES, MAX_CHUNK_BYTES)
+        );
+
+        return {
+            chunkSize: chunkSize,
+            internalReadSize: Math.max(
+                MIN_INTERNAL_READ_BYTES,
+                handlerOptions.internalReadSize || DEFAULT_INTERNAL_READ_BYTES
+            ),
+            maxMoovBytes: handlerOptions.maxMoovBytes || DEFAULT_MAX_MOOV_BYTES,
+            maxTailSearchBytes: handlerOptions.maxTailSearchBytes || DEFAULT_MAX_TAIL_SEARCH_BYTES,
+            xhrRangeTimeoutMs: handlerOptions.xhrRangeTimeoutMs || DEFAULT_XHR_RANGE_TIMEOUT_MS,
+            tailSearchChunkBytes: Math.max(
+                MP4_HEADER_READ_BYTES,
+                Math.min(handlerOptions.tailSearchChunkBytes || DEFAULT_TAIL_SEARCH_CHUNK_BYTES, chunkSize)
+            ),
+            maxSampleBytes: Math.min(
+                handlerOptions.maxSampleBytes || DEFAULT_MAX_SAMPLE_BYTES,
+                chunkSize
+            )
+        };
+    }
+
+    function readBoxHeader(reader, offset, fileSize, cb) {
+        if (offset >= fileSize) {
+            cb(null, null);
+            return;
+        }
+
+        reader.readRange(offset, Math.min(MP4_HEADER_READ_BYTES, fileSize - offset), function (err, buffer) {
+            if (err) {
+                cb(err);
+                return;
+            }
+
+            try {
+                var view = new DataView(buffer);
+                if (view.byteLength < 8) throw Error('truncated MP4 box header');
+
+                var size = view.getUint32(0);
+                var type = String.fromCharCode(
+                    view.getUint8(4), view.getUint8(5),
+                    view.getUint8(6), view.getUint8(7)
+                );
+                var headerSize = 8;
+
+                if (size === 1) {
+                    if (view.byteLength < 16) throw Error('truncated extended MP4 box header');
+                    var hi = view.getUint32(8);
+                    var lo = view.getUint32(12);
+                    size = hi * 0x100000000 + lo;
+                    headerSize = 16;
+                } else if (size === 0) {
+                    size = fileSize - offset;
+                }
+
+                var remaining = fileSize - offset;
+                var boxDetails = 'type=' + JSON.stringify(type) +
+                                 ' size=' + size +
+                                 ' remaining=' + remaining;
+
+                if (size < headerSize) throw Error('invalid MP4 box size (' + boxDetails + ')');
+                if (offset + size > fileSize) throw Error('MP4 box exceeds file (' + boxDetails + ')');
+
+                cb(null, {
+                    type: type,
+                    start: offset,
+                    body: offset + headerSize,
+                    size: size,
+                    end: offset + size
+                });
+            } catch (e) {
+                cb(Error('MP4 box header at ' + offset + ': ' + e.message));
+            }
+        });
+    }
+
+    function isSupportedTextTrack(track) {
+        var isSubtitleHandler = track.handler === 'subt' ||
+                                track.handler === 'sbtl' ||
+                                track.handler === 'text';
+        var isSupportedCodec = track.codec === 'tx3g' ||
+                               track.codec === 'text' ||
+                               track.codec === 'mov_';
+
+        return isSubtitleHandler &&
+               isSupportedCodec &&
+               track.timescale &&
+               track.sampleSizes &&
+               track.sampleSizes.length &&
+               track.chunkOffsets &&
+               track.chunkOffsets.length &&
+               track.stsc &&
+               track.stsc.length;
+    }
+
+    function makeIncrementalTrack(track) {
+        return {
+            id: track.id,
+            lang: track.lang || '',
+            codec: track.codec,
+            cues: []
+        };
+    }
+
+    function extractIncremental(file, handlers) {
+        handlers = handlers || {};
+
+        var cancelled = false;
+        var finished = false;
+        var reader = null;
+        var fileSize = 0;
+        var published = false;
+        var lastLoggedPercent = -5;
+        var triedTailMoovSearch = false;
+        var options = normalizeIncrementalOptions(handlers);
+
+        function safeCallback(name) {
+            if (cancelled || typeof handlers[name] !== 'function') return;
+
+            try {
+                handlers[name].apply(null, [].slice.call(arguments, 1));
+            } catch (e) {
+                warn(name + ' callback: ' + e.message);
+            }
+        }
+
+        function closeReader() {
+            if (!reader) return;
+
+            try { reader.close(); } catch (e) {}
+            reader = null;
+        }
+
+        function fail(err) {
+            if (cancelled || finished) return;
+
+            finished = true;
+            closeReader();
+            warn('parse error: ' + (err.message || err));
+            safeCallback('onError', err instanceof Error ? err : Error(String(err)));
+        }
+
+        function reportProgress(processed, total) {
+            safeCallback('onProgress', processed, total || fileSize);
+
+            var denominator = total || fileSize;
+            var percent = denominator ? Math.floor(processed * 100 / denominator) : 100;
+            if (percent >= lastLoggedPercent + 5) {
+                lastLoggedPercent = percent;
+                log('processed ' + percent + '%');
+            }
+        }
+
+        function publishTracksOnce(tracks) {
+            if (published) return;
+
+            published = true;
+            log('discovered ' + tracks.length + ' supported text track(s)');
+            safeCallback('onTracks', tracks);
+        }
+
+        function finish(tracks) {
+            if (cancelled || finished) return;
+
+            finished = true;
+            closeReader();
+            log('complete: ' + tracks.map(function (track) {
+                return track.id + '=' + track.cues.length;
+            }).join(', '));
+            safeCallback('onComplete', tracks);
+        }
+
+        function readMoovBox(moovBox) {
+            if (moovBox.size > options.maxMoovBytes) {
+                fail(Error('moov box too large for bounded metadata read: ' + moovBox.size + ' bytes'));
+                return;
+            }
+
+            reader.readRange(moovBox.body, moovBox.end - moovBox.body, function (err, buffer) {
+                if (err) {
+                    fail(err);
+                    return;
+                }
+
+                var textTrackMetadata;
+                try {
+                    textTrackMetadata = parseMp4(buffer).filter(isSupportedTextTrack);
+                } catch (e) {
+                    fail(e);
+                    return;
+                }
+
+                var liveTracks = textTrackMetadata.map(makeIncrementalTrack);
+                publishTracksOnce(liveTracks);
+
+                if (!liveTracks.length) {
+                    finish(liveTracks);
+                    return;
+                }
+
+                extractTrackSamples(textTrackMetadata, liveTracks);
+            });
+        }
+
+        function findMoovInBuffer(buffer, baseOffset) {
+            var view = new DataView(buffer);
+
+            for (var typeOffset = view.byteLength - 4; typeOffset >= 4; typeOffset--) {
+                if (view.getUint8(typeOffset) !== 0x6D ||     // m
+                    view.getUint8(typeOffset + 1) !== 0x6F || // o
+                    view.getUint8(typeOffset + 2) !== 0x6F || // o
+                    view.getUint8(typeOffset + 3) !== 0x76) { // v
+                    continue;
+                }
+
+                var boxStart = typeOffset - 4;
+                var size = view.getUint32(boxStart);
+                var headerSize = 8;
+
+                if (size === 1) {
+                    if (boxStart + 16 > view.byteLength) continue;
+
+                    var hi = view.getUint32(boxStart + 8);
+                    var lo = view.getUint32(boxStart + 12);
+                    size = hi * 0x100000000 + lo;
+                    headerSize = 16;
+                } else if (size === 0) {
+                    size = view.byteLength - boxStart;
+                }
+
+                var absoluteStart = baseOffset + boxStart;
+                var absoluteEnd = absoluteStart + size;
+                if (size < headerSize || absoluteEnd > fileSize) continue;
+
+                return {
+                    type: 'moov',
+                    start: absoluteStart,
+                    body: absoluteStart + headerSize,
+                    size: size,
+                    end: absoluteEnd
+                };
+            }
+
+            return null;
+        }
+
+        function bufferContainsBoxType(buffer, type) {
+            var view = new DataView(buffer);
+            var a = type.charCodeAt(0);
+            var b = type.charCodeAt(1);
+            var c = type.charCodeAt(2);
+            var d = type.charCodeAt(3);
+
+            for (var i = 0; i <= view.byteLength - 4; i++) {
+                if (view.getUint8(i) === a &&
+                    view.getUint8(i + 1) === b &&
+                    view.getUint8(i + 2) === c &&
+                    view.getUint8(i + 3) === d) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        function findMoovNearTail(originalErr) {
+            if (triedTailMoovSearch) {
+                fail(originalErr || Error('moov box not found'));
+                return;
+            }
+            triedTailMoovSearch = true;
+
+            var searchBytes = Math.min(options.maxTailSearchBytes, fileSize);
+            var searchStart = fileSize - searchBytes;
+            var sawMoof = false;
+
+            function failAfterTailSearch() {
+                var originalMessage = originalErr && (originalErr.message || originalErr);
+                fail(Error('moov box not found after top-level scan and tail search' +
+                           (sawMoof ? ' (saw fragmented MP4 boxes)' : '') +
+                           (originalMessage ? '; original error: ' + originalMessage : '')));
+            }
+
+            function searchChunk(chunkEnd) {
+                if (cancelled) return;
+
+                if (chunkEnd <= searchStart) {
+                    failAfterTailSearch();
+                    return;
+                }
+
+                var chunkStart = Math.max(searchStart, chunkEnd - options.tailSearchChunkBytes);
+                reader.readRange(chunkStart, chunkEnd - chunkStart, function (err, buffer) {
+                    if (err) {
+                        fail(err);
+                        return;
+                    }
+
+                    sawMoof = sawMoof || bufferContainsBoxType(buffer, 'moof');
+
+                    var moovBox = findMoovInBuffer(buffer, chunkStart);
+                    if (moovBox) {
+                        log('found moov by tail search at ' + moovBox.start + ' size=' + moovBox.size);
+                        readMoovBox(moovBox);
+                        return;
+                    }
+
+                    if (chunkStart === searchStart) {
+                        failAfterTailSearch();
+                        return;
+                    }
+
+                    later(function () {
+                        searchChunk(chunkStart + TAIL_SEARCH_OVERLAP_BYTES);
+                    });
+                });
+            }
+
+            searchChunk(fileSize);
+        }
+
+        function extractTrackSamples(metadataTracks, liveTracks) {
+            var trackIndex = 0;
+
+            function nextTrack() {
+                if (cancelled) return;
+                if (trackIndex >= metadataTracks.length) {
+                    finish(liveTracks);
+                    return;
+                }
+
+                extractOneTrack(metadataTracks[trackIndex], liveTracks[trackIndex], function (err) {
+                    if (err) fail(err);
+                    else {
+                        trackIndex++;
+                        later(nextTrack);
+                    }
+                });
+            }
+
+            nextTrack();
+        }
+
+        function extractOneTrack(metadata, liveTrack, cb) {
+            var offsets = computeSampleOffsets(
+                metadata.stsc,
+                metadata.chunkOffsets,
+                metadata.sampleSizes.length,
+                metadata.sampleSizes
+            );
+            var times = expandStts(metadata.stts, metadata.sampleSizes.length);
+            var sampleIndex = 0;
+
+            function nextSample() {
+                if (cancelled) return;
+                if (sampleIndex >= metadata.sampleSizes.length) {
+                    safeCallback('onCues', liveTrack.id, liveTrack.cues);
+                    cb(null);
+                    return;
+                }
+
+                var size = metadata.sampleSizes[sampleIndex];
+                var offset = offsets[sampleIndex];
+                var time = times[sampleIndex];
+                var currentSample = sampleIndex;
+                sampleIndex++;
+
+                reportProgress(sampleIndex, metadata.sampleSizes.length);
+
+                if (!size) {
+                    later(nextSample);
+                    return;
+                }
+                if (!Number.isSafeInteger(offset) || offset < 0 || offset + size > fileSize) {
+                    cb(Error('subtitle sample points outside file at index ' + currentSample));
+                    return;
+                }
+                if (size > options.maxSampleBytes) {
+                    warn('skipping oversized subtitle sample at ' + offset);
+                    later(nextSample);
+                    return;
+                }
+
+                reader.readRange(offset, size, function (err, buffer) {
+                    if (err) {
+                        cb(err);
+                        return;
+                    }
+
+                    var text = decodeTextSample(buffer, 0, buffer.byteLength).trim();
+                    if (text) {
+                        liveTrack.cues.push({
+                            start: time.start / metadata.timescale,
+                            end: time.end / metadata.timescale,
+                            text: text
+                        });
+
+                        safeCallback('onCues', liveTrack.id, liveTrack.cues);
+                    }
+
+                    later(nextSample);
+                });
+            }
+
+            nextSample();
+        }
+
+        function findMoov(offset) {
+            if (cancelled) return;
+
+            readBoxHeader(reader, offset, fileSize, function (err, box) {
+                if (err) {
+                    findMoovNearTail(err);
+                    return;
+                }
+                if (!box) {
+                    findMoovNearTail(Error('moov box not found'));
+                    return;
+                }
+
+                if (box.type === 'moov') {
+                    log('found moov at ' + box.start + ' size=' + box.size);
+                    readMoovBox(box);
+                } else {
+                    reportProgress(box.end, fileSize);
+                    later(function () { findMoov(box.end); });
+                }
+            });
+        }
+
+        openIncrementalReader(file, options, function (err, openedReader) {
+            if (cancelled) {
+                if (openedReader) openedReader.close();
+                return;
+            }
+            if (err) {
+                fail(err);
+                return;
+            }
+
+            reader = openedReader;
+            reader.getSize(function (sizeErr, size) {
+                if (sizeErr) {
+                    fail(sizeErr);
+                    return;
+                }
+
+                fileSize = Number(size);
+                if (!Number.isSafeInteger(fileSize)) {
+                    fail(Error('invalid file size'));
+                    return;
+                }
+
+                log('file size=' + fileSize +
+                    ' reader=' + (reader.implementation || 'custom') +
+                    ' chunk=' + options.chunkSize);
+                findMoov(0);
+            });
+        });
+
+        return {
+            cancel: function (reason) {
+                if (cancelled || finished) return;
+
+                cancelled = true;
+                closeReader();
+                log('cancelled' + (reason ? ': ' + reason : ''));
+            }
+        };
     }
 
     /* Write an SRT string into wgt-private-tmp and call cb with a record:
@@ -390,7 +1278,13 @@ var Mp4Subs = (function () {
 
     return {
         extract:       extract,
+        extractIncremental: extractIncremental,
         cuesToSrt:     cuesToSrt,
+        _extractCueLists: extractCueLists,
         writeSrtToTmp: writeSrtToTmp
     };
 })();
+
+// CommonJS export is ignored by Tizen/browser builds, but lets Node tests
+// require this parser directly.
+if (typeof module !== 'undefined' && module.exports) module.exports = Mp4Subs;
