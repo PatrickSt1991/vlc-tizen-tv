@@ -1,0 +1,29 @@
+name: Test Tizen Web VLC
+
+on:
+  pull_request:
+    paths:
+      - 'tizen-web-vlc/**'
+      - 'tests/tizen-web-vlc/**'
+      - '.github/workflows/tizen-web-vlc-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tizen-web-vlc/**'
+      - 'tests/tizen-web-vlc/**'
+      - '.github/workflows/tizen-web-vlc-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run MP4 subtitle tests
+        run: node --test tests/tizen-web-vlc/mp4-subs.test.js
