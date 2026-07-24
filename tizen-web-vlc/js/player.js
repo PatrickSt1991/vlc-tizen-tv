@@ -1501,7 +1501,14 @@ var Player = (function () {
      * stay inside what AVPlay actually supports — anything wilder either
      * silently fails or drops audio.  Last applied speed is remembered so
      * the UI can show the current rate without round-tripping through the
-     * native API (which doesn't have a getter on every firmware). */
+     * native API (which doesn't have a getter on every firmware).
+     *
+     * Audio-muting caveat (issue #49): Samsung's AVPlay implementation
+     * silences audio at any rate != 1.0.  It's a hardware-decoder-level
+     * limitation, not something we can defeat from JS.  The HTML5 <video>
+     * fallback DOES support pitched-audio at non-1× rates on Chromium 63,
+     * as long as preservesPitch is set — we opt into that here so files
+     * that fall through to HTML5 sound natural instead of chipmunky. */
     var currentSpeed = 1;
     function setSpeed(rate) {
         rate = +rate;
@@ -1515,12 +1522,28 @@ var Player = (function () {
                 return false;
             }
         } else if (backend === BACKEND_HTML5) {
-            try { h5el().playbackRate = rate; } catch (e) { return false; }
+            try {
+                var v = h5el();
+                // preservesPitch keeps audio intelligible at 0.5×/1.5×/etc.
+                // instead of pitching it up or down.  webkitPreservesPitch is
+                // the pre-standard name — Chromium 63 (Tizen 5) accepts either.
+                v.preservesPitch       = true;
+                v.webkitPreservesPitch = true;
+                v.playbackRate = rate;
+            } catch (e) { return false; }
         }
         currentSpeed = rate;
         return true;
     }
-    function getSpeed() { return currentSpeed; }
+    function getSpeed()   { return currentSpeed; }
+    function getBackend() { return backend; }
+    /* True when the current backend silences audio at the current rate.
+     * Callers use this to inform the user before they wonder why their
+     * TV suddenly went quiet.  Only AVPlay has this problem — HTML5 with
+     * preservesPitch above keeps audio intact. */
+    function isSpeedMuted() {
+        return backend === BACKEND_AVPLAY && currentSpeed !== 1;
+    }
 
     return {
         setListener:        setListener,
@@ -1541,6 +1564,8 @@ var Player = (function () {
         isBuffering:        isBuffering,
         lastBufferingMs:    lastBufferingMs,
         setSpeed:           setSpeed,
-        getSpeed:           getSpeed
+        getSpeed:           getSpeed,
+        getBackend:         getBackend,
+        isSpeedMuted:       isSpeedMuted
     };
 })();

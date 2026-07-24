@@ -2,7 +2,7 @@
 <widget xmlns:tizen="http://tizen.org/ns/widgets"
         xmlns="http://www.w3.org/ns/widgets"
         id="http://madebypatrick.com/vlctv"
-        version="1.2.0"
+        version="1.2.1"
         viewmodes="maximized">
     <tizen:application id="madebypatk.vlcweb"
                        package="madebypatk"
