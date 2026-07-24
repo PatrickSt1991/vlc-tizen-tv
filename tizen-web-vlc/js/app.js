@@ -1190,20 +1190,29 @@
      * because episode 1 was. */
     function openSpeedPicker() {
         var cur = String(Player.getSpeed ? Player.getSpeed() : 1);
+        /* On the AVPlay backend, non-1× rates silence audio (Samsung
+         * hardware-decoder limitation — issue #49).  Note that inline in
+         * the option labels so the user isn't blindsided by a mute the
+         * moment they pick 1.5×. */
+        var avplay = Player.getBackend && Player.getBackend() === 'avplay';
+        var muteNote = avplay ? '  (audio muted)' : '';
         openPicker('Playback speed', [
-            { code: '0.5',  name: '0.5×' },
-            { code: '0.75', name: '0.75×' },
+            { code: '0.5',  name: '0.5×' + muteNote },
+            { code: '0.75', name: '0.75×' + muteNote },
             { code: '1',    name: 'Normal (1×)' },
-            { code: '1.25', name: '1.25×' },
-            { code: '1.5',  name: '1.5×' },
-            { code: '2',    name: '2×' }
+            { code: '1.25', name: '1.25×' + muteNote },
+            { code: '1.5',  name: '1.5×' + muteNote },
+            { code: '2',    name: '2×' + muteNote }
         ], cur, function (val) {
             if (!Player.setSpeed(parseFloat(val))) {
                 UI.toast('Speed change not supported on this stream');
                 return;
             }
             updateSpeedButton();
-            UI.toast('Speed: ' + (val === '1' ? 'normal' : val + '×'));
+            var msg = 'Speed: ' + (val === '1' ? 'normal' : val + '×');
+            if (Player.isSpeedMuted && Player.isSpeedMuted())
+                msg += ' — audio muted (Samsung TV limitation)';
+            UI.toast(msg);
         });
     }
     function updateSpeedButton() {
@@ -1211,7 +1220,11 @@
         if (!btn) return;
         var s = Player.getSpeed ? Player.getSpeed() : 1;
         // Compact label: "1×" / "1.5×" — no trailing zeros so "1.5×" not "1.50×".
-        btn.textContent = (s === Math.floor(s) ? s : (Math.round(s * 100) / 100)) + '×';
+        var label = (s === Math.floor(s) ? s : (Math.round(s * 100) / 100)) + '×';
+        // 🔇 postfix when audio is silenced by the speed change so the OSD
+        // makes the trade-off visible at a glance (issue #49).
+        if (Player.isSpeedMuted && Player.isSpeedMuted()) label += ' 🔇';
+        btn.textContent = label;
     }
     function openAutoPlayPicker() {
         pickerSetting = 'autoPlay';
