@@ -30,7 +30,15 @@
     </header>
 
     <nav class="home-tiles">
-        <button class="tile" data-action="open-url" data-focus>
+        <!-- Recently Played is intentionally the leftmost tile so the D-pad
+             lands on it first — the common return-visit action is "resume
+             what I was watching", not "browse from scratch" (issue #56). -->
+        <button class="tile" data-action="browse-recent" data-focus>
+            <div class="tile-icon">★</div>
+            <div class="tile-label">Recently Played</div>
+            <div class="tile-sub">Quick access to past media</div>
+        </button>
+        <button class="tile" data-action="open-url">
             <div class="tile-icon">URL</div>
             <div class="tile-label">Open Network Stream</div>
             <div class="tile-sub">HTTP · HLS · DASH · RTSP · RTMP</div>
@@ -44,11 +52,6 @@
             <div class="tile-icon">SMB</div>
             <div class="tile-label">Browse SMB Share</div>
             <div class="tile-sub">Network files over your LAN</div>
-        </button>
-        <button class="tile" data-action="browse-recent">
-            <div class="tile-icon">★</div>
-            <div class="tile-label">Recently Played</div>
-            <div class="tile-sub">Quick access to past media</div>
         </button>
         <button class="tile" data-action="open-settings">
             <div class="tile-icon">⚙</div>
