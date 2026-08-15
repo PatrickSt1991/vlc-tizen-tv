@@ -780,6 +780,26 @@
         closeTrackMenu();
     }
 
+    /* Cleanly quit the app from the home view (issue #57).  Tizen exposes
+     * this on the current-application object; window.close() is a fallback
+     * for the emulator / desktop-preview environment where the tizen
+     * namespace isn't present.  Player is stopped first so AVPlay isn't
+     * left holding a decoder handle if the user quit mid-playback via
+     * exitPlayer → home → BACK. */
+    function exitApp() {
+        if (typeof Debug !== 'undefined') Debug.action('exit-app');
+        try { Player.stop(); } catch (e) {}
+        try {
+            if (typeof tizen !== 'undefined' && tizen.application) {
+                tizen.application.getCurrentApplication().exit();
+                return;
+            }
+        } catch (e) {
+            if (typeof Debug !== 'undefined') Debug.warn('tizen.application.exit failed: ' + (e.message || e));
+        }
+        try { window.close(); } catch (e) {}
+    }
+
     /* ── OSD show/hide ────────────────────────────────────────────── */
     var osdHideTimer = null;
     function showOSD(visible) {
@@ -1448,10 +1468,14 @@
             case K.ENTER:
                 // In player view: OK activates the focused OSD button if the OSD
                 // is up (so Stop / CC-Audio / etc. are reachable).  If the OSD
-                // is hidden, OK just brings it up.
+                // is hidden, OK toggles play/pause AND brings the OSD up —
+                // matches YouTube-on-TV / Netflix, and gives users whose
+                // remote's dedicated Play/Pause hard key isn't delivered to
+                // the app (Smart Monitor M5 and friends — issues #42, #57)
+                // a working way to pause without opening the OSD first.
                 if (state.view === 'player' && !errorUp && !trackMenuOpen) {
                     if (scrub.active) { commitScrub(); return true; }
-                    if (!osdVisible) { flashOSD(); return true; }
+                    if (!osdVisible) { Player.togglePause(); flashOSD(); return true; }
                     if (!UI.activateFocused()) flashOSD();
                     return true;
                 }
@@ -1465,7 +1489,12 @@
                 if (state.view === 'player')    { exitPlayer();      return true; }
                 if (state.view === 'url')       { backToHome();      return true; }
                 if (state.view === 'settings')  { backToHome();      return true; }
-                return false; /* let TV handle EXIT-from-home */
+                /* Home view: explicitly exit the app rather than trusting the
+                 * TV launcher to intercept an unhandled BACK — that fallback
+                 * doesn't fire on Smart Monitors, leaving the user with no
+                 * way out (issue #57). */
+                if (state.view === 'home')      { exitApp();         return true; }
+                return false;
             case K.PLAY:
             case K.PAUSE:
             case K.PLAYPAUSE:
