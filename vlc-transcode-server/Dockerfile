@@ -2,7 +2,7 @@
 # Pure-Go (go-smb2 needs no cgo), so we cross-compile a fully static binary for
 # the target arch on the native build arch — no QEMU emulation for the Go step,
 # which keeps multi-arch builds fast.
-FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
