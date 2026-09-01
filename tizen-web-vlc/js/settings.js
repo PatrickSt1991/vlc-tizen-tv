@@ -16,7 +16,13 @@ var Settings = (function () {
         subtitleSize:     'medium',    // 'small' | 'medium' | 'large' | 'xlarge'
         subtitleFont:     'sans',      // 'sans' | 'serif' | 'mono'
         subtitlePosition: 'bottom',    // 'bottom' | 'middle' | 'top'
-        subtitleBg:       'none'       // 'none' | 'box'  (translucent box behind text)
+        subtitleBg:       'none',      // 'none' | 'box'  (translucent box behind text)
+        // The TV's pairing code (url-drop.js mints it once and persists it
+        // here).  It HAS to be listed: load() rebuilds the cache from this
+        // object, so a key that isn't here is silently dropped on the next
+        // launch — which regenerated the code on every app start and quietly
+        // unpaired every phone that had scanned the QR.
+        urlDropCode:      ''
     };
     var cache = null;
 
