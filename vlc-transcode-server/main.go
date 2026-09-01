@@ -59,7 +59,7 @@ func main() {
 	// The manager needs to know how to build the localhost raw-bridge URL, which
 	// lives in the web layer — wire it after constructing the server.
 	srv := web.New(cfg, smbClient, nil, port)
-	mgr, err := transcode.NewManager(caps, workDir, srv.RawURL)
+	mgr, err := transcode.NewManager(caps, workDir, srv.RawURL, func() string { return cfg.Surround })
 	if err != nil {
 		log.Fatalf("manager: %v", err)
 	}

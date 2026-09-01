@@ -3,6 +3,23 @@
 
 const $ = (id) => document.getElementById(id);
 let anon = false;
+let localRelay = false;
+let adopt = true;
+
+// Every /api endpoint except /api/hello and /api/status needs the pairing
+// token. This page is served by the same box, so it just reads the token off
+// /api/status like a TV would; see the note on guard() in server.go for what
+// that check is and isn't worth.
+let token = '';
+let lastAdoptLeft = 0;   // so the switch can repaint the window line without a fetch
+const api = (path) => path + (token ? (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token) : '');
+
+// Human labels for the read-only playback pills.
+const SURROUND_LABEL = {
+  off:  'off — stereo out',
+  eac3: 'Dolby Digital Plus 5.1',
+  ac3:  'Dolby Digital 5.1',
+};
 
 function setMsg(text, kind) {
   const m = $('msg');
@@ -13,6 +30,32 @@ function setMsg(text, kind) {
 function paintAnon() {
   $('anon').classList.toggle('on', anon);
   $('creds').style.opacity = anon ? .4 : 1;
+}
+
+function paintLocalRelay() {
+  $('localrelay').classList.toggle('on', localRelay);
+}
+
+function paintAdopt() {
+  $('adopt').classList.toggle('on', adopt);
+}
+
+// The share password is only on offer inside the window; say plainly whether a
+// TV pairing right now would get it.
+function paintAdoptWindow(secondsLeft) {
+  const el = $('adopt-state');
+  if (!adopt)          { el.textContent = 'switched off — the TV will never get these'; return; }
+  if (secondsLeft <= 0) { el.textContent = 'closed — a TV pairing now must be given the share by hand'; return; }
+  const mins = Math.ceil(secondsLeft / 60);
+  el.textContent = 'open for another ' + (mins === 1 ? 'minute' : mins + ' minutes');
+}
+
+async function allowAdopt() {
+  const r = await fetch(api('/api/allow-adopt'), { method: 'POST' });
+  if (!r.ok) { setMsg('Could not reopen the pairing window.', 'err'); return; }
+  const j = await r.json();
+  paintAdoptWindow(j.seconds || 0);
+  setMsg('Pairing window open — pair the TV now.', 'ok');
 }
 
 // Format a UTC ISO timestamp as "just now / N min ago / today at HH:MM /
@@ -39,10 +82,17 @@ function formatAgo(iso) {
 async function loadStatus() {
   try {
     const s = await (await fetch('/api/status')).json();
+    token = s.token || '';
     $('st-enc').textContent = s.encoder || '—';
     $('st-hw').textContent = s.hwaccel === 'none' ? 'software' : (s.hwaccel || '—');
     $('st-share').textContent = s.configured ? s.share : 'not configured';
+    $('pb-surround').textContent = SURROUND_LABEL[s.surround] || SURROUND_LABEL.off;
+    $('pb-relay').textContent = s.localRelay ? 'accepted' : 'not accepted';
+    lastAdoptLeft = s.adoptLeft || 0;
+    paintAdoptWindow(lastAdoptLeft);
     $('st-url').textContent = s.serverURL || '—';
+    // The address to type on the TV when the LAN scan can't reach this box.
+    $('pair-addr').textContent = s.serverURL ? s.serverURL.replace(/^https?:\/\//, '') : "this box's address";
     $('hdot').style.background = s.configured ? 'var(--ok)' : 'var(--mut)';
     if (s.configured && s.serverURL && s.token) {
       $('testcard').style.display = '';
@@ -66,7 +116,7 @@ async function pair() {
   const code = $('code').value.trim();
   if (!code) { $('pairmsg').textContent = 'Enter the code shown on the TV.'; $('pairmsg').className = 'msg err'; return; }
   $('pairmsg').textContent = 'Pairing…'; $('pairmsg').className = 'msg';
-  const res = await (await fetch('/api/pair', {
+  const res = await (await fetch(api('/api/pair'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code }),
   })).json();
@@ -82,7 +132,7 @@ async function pair() {
 }
 
 async function loadConfig() {
-  const c = await (await fetch('/api/config')).json();
+  const c = await (await fetch(api('/api/config'))).json();
   const smb = c.smb || c.SMB || {};
   $('host').value = smb.host || '';
   $('port').value = smb.port || 445;
@@ -91,6 +141,17 @@ async function loadConfig() {
   $('domain').value = smb.domain || '';
   anon = !!smb.anonymous;
   paintAnon();
+  localRelay = !!c.local_relay;
+  paintLocalRelay();
+  adopt = c.share_credentials !== false;
+  paintAdopt();
+}
+
+// Status carries the token, so it has to land before anything else is fetched.
+async function boot() {
+  await loadStatus();
+  await loadConfig();
+  setInterval(loadStatus, 5000);
 }
 
 function readForm() {
@@ -102,29 +163,51 @@ function readForm() {
     pass: $('pass').value,        // blank = keep stored
     domain: $('domain').value.trim(),
     anonymous: anon,
+    share_credentials: adopt,
   };
 }
 
-async function save() {
-  const r = await fetch('/api/config', {
+async function postConfig(body) {
+  return fetch(api('/api/config'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(readForm()),
+    body: JSON.stringify(body),
   });
+}
+
+async function save() {
+  const r = await postConfig(readForm());
   if (r.ok) { setMsg('Saved.', 'ok'); $('pass').value = ''; loadStatus(); }
   else setMsg('Save failed.', 'err');
+}
+
+// Posts only the relay permission — the server applies just the keys it's sent,
+// so this can't disturb the share settings sitting in the form above.
+async function savePlayback() {
+  const m = $('pbmsg');
+  const r = await postConfig({ local_relay: localRelay });
+  if (r.ok) {
+    m.textContent = localRelay
+      ? 'Saved. The TV may now send files from its USB drive.'
+      : 'Saved. The box will only read from the share again.';
+    m.className = 'msg ok';
+    loadStatus();
+  } else {
+    m.textContent = 'Save failed.';
+    m.className = 'msg err';
+  }
 }
 
 async function test() {
   setMsg('Testing…');
   await save();
-  const res = await (await fetch('/api/test', { method: 'POST' })).json();
+  const res = await (await fetch(api('/api/test'), { method: 'POST' })).json();
   if (res.ok) setMsg('Connected to the share ✓', 'ok');
   else setMsg('Could not connect: ' + (res.error || 'unknown'), 'err');
 }
 
 async function browse(path) {
   setMsg('Loading ' + (path || 'root') + '…');
-  const res = await (await fetch('/api/browse?path=' + encodeURIComponent(path || ''))).json();
+  const res = await (await fetch(api('/api/browse?path=' + encodeURIComponent(path || '')))).json();
   const ul = $('list');
   ul.innerHTML = '';
   if (!res.ok) { setMsg('Browse failed: ' + (res.error || 'unknown'), 'err'); return; }
@@ -151,11 +234,13 @@ async function browse(path) {
 }
 
 $('anon').onclick = () => { anon = !anon; paintAnon(); };
+$('localrelay').onclick = () => { localRelay = !localRelay; paintLocalRelay(); };
+$('adopt').onclick = () => { adopt = !adopt; paintAdopt(); paintAdoptWindow(lastAdoptLeft); };
+$('allow-adopt').onclick = allowAdopt;
+$('save-playback').onclick = savePlayback;
 $('save').onclick = save;
 $('test').onclick = test;
 $('browse').onclick = async () => { await save(); browse(''); };
 $('pair').onclick = pair;
 
-loadConfig();
-loadStatus();
-setInterval(loadStatus, 5000);
+boot();

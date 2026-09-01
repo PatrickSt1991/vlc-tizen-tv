@@ -12,6 +12,11 @@ var Settings = (function () {
         repeatMode:       'off',       // 'off' | 'one'
         autoPlay:         false,       // auto-play the next file in the folder when one finishes
         shuffle:          false,       // randomize playlist order (folder + recent) instead of alphabetical
+        // Route USB / internal-storage files through the paired transcode
+        // server instead of straight into AVPlay.  Off by default: it only
+        // helps when a transcode server is paired, and it costs the embedded
+        // AVPlay fallbacks that direct local playback gets.
+        localRelay:       false,
         // ── Subtitle appearance (applied to the painted overlay) ──────────
         subtitleSize:     'medium',    // 'small' | 'medium' | 'large' | 'xlarge'
         subtitleFont:     'sans',      // 'sans' | 'serif' | 'mono'

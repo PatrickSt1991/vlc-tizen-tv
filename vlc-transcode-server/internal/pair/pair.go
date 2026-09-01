@@ -39,7 +39,7 @@ func Publish(ctx context.Context, code, serverURL, token string) error {
 	if code == "" {
 		return fmt.Errorf("empty pairing code")
 	}
-	ann := Announce{Type: "vlc-tv-transcode-server", URL: serverURL, Token: token, Name: hostname()}
+	ann := Announce{Type: "vlc-tv-transcode-server", URL: serverURL, Token: token, Name: Hostname()}
 	body, _ := json.Marshal(ann)
 
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
@@ -86,7 +86,9 @@ func outboundIP() string {
 	return ""
 }
 
-func hostname() string {
+// Hostname is the friendly name shown next to this box — in the pairing
+// announcement, and in the list a scanning TV puts on screen.
+func Hostname() string {
 	h, err := os.Hostname()
 	if err != nil || h == "" {
 		return "VLC TV Transcode Server"

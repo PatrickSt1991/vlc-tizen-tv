@@ -16,7 +16,7 @@ import (
 // Segments land in Dir; index.m3u8 is the playlist AVPlay loads.
 type session struct {
 	ID       string
-	SrcPath  string // SMB-relative path, for logs
+	SrcPath  string // source label (SMB path or relay URL), for logs
 	Dir      string
 	Plan     Plan
 	cmd      *exec.Cmd
@@ -91,14 +91,20 @@ func (c *Caps) buildArgs(in string, p Plan, dir string) []string {
 	// ── audio ──────────────────────────────────────────────────────────
 	if p.CopyAudio {
 		a = append(a, "-c:a", "copy")
-	} else if p.AudioEnc == "ac3" {
-		ch := p.mi.AudioChans
-		if ch == 0 || ch > 6 {
-			ch = 6 // AC-3 tops out at 5.1
-		}
-		a = append(a, "-c:a", "ac3", "-b:a", "640k", "-ac", fmt.Sprintf("%d", ch))
-	} else { // aac
+	} else if p.AudioEnc == "aac" {
 		a = append(a, "-c:a", "aac", "-b:a", "256k")
+	} else { // ac3 / eac3 — the two the TV can bitstream to a soundbar
+		ch := p.mi.AudioChans
+		if ch <= 0 || ch > 6 {
+			ch = 6 // both encoders top out at 5.1; 7.1 sources fold down
+		}
+		// AC-3's ceiling is 640k. E-AC-3 has headroom above that and is only
+		// ever chosen here for multichannel, so spend it.
+		br := "640k"
+		if p.AudioEnc == "eac3" {
+			br = "768k"
+		}
+		a = append(a, "-c:a", p.AudioEnc, "-b:a", br, "-ac", fmt.Sprintf("%d", ch))
 	}
 
 	// ── HLS muxer: growing ("event") VOD playlist, keep every segment so the
@@ -135,9 +141,12 @@ func (c *Caps) videoEncodeArgs() []string {
 	}
 }
 
-// idFor derives a stable session id from the source path.
-func idFor(path string) string {
-	h := sha1.Sum([]byte(path))
+// idFor derives a stable session id from the source and the audio policy that
+// produced it. The policy is part of the key because it is web-editable at
+// runtime: without it, flipping surround on would keep serving the stereo
+// session already sitting in the work dir for that file.
+func idFor(src, surround string) string {
+	h := sha1.Sum([]byte(src + "\x00" + surround))
 	return hex.EncodeToString(h[:])[:16]
 }
 

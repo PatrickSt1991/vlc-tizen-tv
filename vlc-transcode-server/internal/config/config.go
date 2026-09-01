@@ -47,6 +47,30 @@ type Config struct {
 	// auto-detect.
 	Encoder string `json:"encoder,omitempty"`
 
+	// Surround is the multichannel audio target: "off" (default), "eac3"
+	// (Dolby Digital Plus) or "ac3" (Dolby Digital). A TV can only hand a
+	// soundbar audio it can bitstream; anything else it decodes and downmixes
+	// to stereo on the way out, so 5.1 FLAC/AAC/DTS arrives as 2.0. Setting
+	// this re-encodes multichannel tracks into a format that survives the trip.
+	// Off by default so an upgrade never starts re-encoding audio that was
+	// previously copied untouched.
+	Surround string `json:"surround,omitempty"`
+
+	// ShareCredentials lets a paired TV pull the SMB settings below (password
+	// included) so the user fills the share in once, here, with a real
+	// keyboard — instead of typing six fields on a TV remote and hoping they
+	// match. A pointer so an existing config file that predates the field
+	// still ends up defaulting to on rather than to Go's zero value; Load
+	// normalises it.
+	ShareCredentials *bool `json:"share_credentials,omitempty"`
+
+	// LocalRelay allows /play to transcode from a URL the TV hands us instead
+	// of only from the SMB share — that's how files on a USB drive plugged
+	// into the TV reach this box. The TV serves them from its own background
+	// service; we only ever fetch, and only from the LAN address it gives us.
+	// Off by default: it widens what a paired TV can ask the box to fetch.
+	LocalRelay bool `json:"local_relay,omitempty"`
+
 	// Token is a long random secret minted on first run. The TV receives it
 	// during pairing and sends it on /play, so a random LAN device can't drive
 	// the transcoder. It rides in URLs the TV builds automatically — no user
@@ -83,7 +107,8 @@ func (c *Config) EnsureToken() error {
 // Load reads the config file, returning an empty (but usable) Config if it does
 // not exist yet. Only a malformed existing file is an error.
 func Load(path string) (*Config, error) {
-	c := &Config{path: path, SMB: SMB{Port: 445}}
+	on := true
+	c := &Config{path: path, SMB: SMB{Port: 445}, ShareCredentials: &on}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -98,7 +123,18 @@ func Load(path string) (*Config, error) {
 	if c.SMB.Port == 0 {
 		c.SMB.Port = 445
 	}
+	if c.ShareCredentials == nil {
+		on := true
+		c.ShareCredentials = &on
+	}
 	return c, nil
+}
+
+// CanShareCredentials reports whether a paired TV may fetch the SMB settings.
+// Absent (an old config, or a hand-written one) means yes — that's the setup
+// the feature exists for.
+func (c *Config) CanShareCredentials() bool {
+	return c.ShareCredentials == nil || *c.ShareCredentials
 }
 
 // Save atomically persists the current config to disk.
@@ -122,13 +158,22 @@ func (c *Config) Save() error {
 
 // View is the JSON shape sent to the web UI — no mutex, password masked.
 type View struct {
-	SMB     SMB    `json:"smb"`
-	Encoder string `json:"encoder,omitempty"`
+	SMB              SMB    `json:"smb"`
+	Encoder          string `json:"encoder,omitempty"`
+	Surround         string `json:"surround"`
+	LocalRelay       bool   `json:"local_relay"`
+	ShareCredentials bool   `json:"share_credentials"`
 }
 
 // Redacted returns a lock-free view safe to send to the web UI.
 func (c *Config) Redacted() View {
-	v := View{SMB: c.SMB, Encoder: c.Encoder}
+	v := View{
+		SMB: c.SMB, Encoder: c.Encoder, Surround: c.Surround,
+		LocalRelay: c.LocalRelay, ShareCredentials: c.CanShareCredentials(),
+	}
+	if v.Surround == "" {
+		v.Surround = "off"
+	}
 	v.SMB.Pass = "" // never leak the stored password
 	return v
 }

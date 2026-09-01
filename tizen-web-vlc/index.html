@@ -280,7 +280,14 @@
         </button>
         <div class="settings-group is-collapsed" id="grp-srv">
             <div class="settings-row"><div class="settings-label">Status</div><div class="settings-value" id="srv-status-val">Not paired</div></div>
-            <button id="srv-pair" class="settings-row"><span class="settings-label">Pair transcode server</span></button>
+            <button id="srv-find" class="settings-row"><span class="settings-label">Find server on my network</span></button>
+            <label class="settings-row settings-row-input"><span class="settings-label">Server address</span><input id="srv-addr" type="text" placeholder="192.168.1.20"></label>
+            <button id="srv-connect" class="settings-row"><span class="settings-label">Connect to this address</span></button>
+            <button id="srv-surround" class="settings-row"><div class="settings-label">Surround sound</div><div class="settings-value" id="srv-surround-val">—</div></button>
+            <button id="srv-local" class="settings-row"><div class="settings-label">Play USB files through the server</div><div class="settings-value" id="srv-local-val">Off</div></button>
+            <button id="srv-adopt" class="settings-row"><span class="settings-label">Get share settings from the server</span></button>
+            <button id="srv-push" class="settings-row"><span class="settings-label">Send my share settings to the server</span></button>
+            <button id="srv-pair" class="settings-row"><span class="settings-label">Pair with a code (needs internet)</span></button>
             <button id="srv-unpair" class="settings-row"><span class="settings-label">Remove transcode server</span></button>
         </div>
 

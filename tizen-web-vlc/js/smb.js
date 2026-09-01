@@ -289,24 +289,44 @@ var SMB = (function () {
     }
 
     /* Wire the Settings form (inputs + Save button) once the DOM is ready. */
-    function wireSettingsForm() {
-        var btn = document.getElementById('smb-save');
-        if (!btn) return;
-        var c = getCreds();
-        var ids = ['host', 'port', 'share', 'user', 'pass', 'domain'];
-        ids.forEach(function (k) {
+    var FORM_IDS = ['host', 'port', 'share', 'user', 'pass', 'domain'];
+
+    // Guest is a toggle button (not a checkbox): the D-pad's geometric nav
+    // can't reliably land on a small right-aligned checkbox, but a full-width
+    // row matches every other setting and gets focus cleanly.  Its state lives
+    // out here so applyCreds() can repaint it when the settings arrive from
+    // somewhere other than this form — e.g. copied off the transcode server.
+    var anonState = false;
+    function paintAnon() {
+        var anonVal = document.getElementById('smb-anon-val');
+        if (anonVal) anonVal.textContent = anonState ? 'On' : 'Off';
+    }
+
+    /* Push a credentials object into the settings form. */
+    function fillSettingsForm(c) {
+        c = c || {};
+        FORM_IDS.forEach(function (k) {
             var el = document.getElementById('smb-' + k);
             if (el && c[k] != null) el.value = c[k];
         });
-
-        // Guest is a toggle button (not a checkbox): the D-pad's geometric nav
-        // can't reliably land on a small right-aligned checkbox, but a
-        // full-width row matches every other setting and gets focus cleanly.
-        var anonBtn = document.getElementById('smb-anon');
-        var anonVal = document.getElementById('smb-anon-val');
-        var anonState = !!c.anonymous;
-        function paintAnon() { if (anonVal) anonVal.textContent = anonState ? 'On' : 'Off'; }
+        anonState = !!c.anonymous;
         paintAnon();
+    }
+
+    /* Store credentials that came from elsewhere and reflect them in the form,
+     * so the user can see what was filled in and correct it if needed. */
+    function applyCreds(c) {
+        setCreds(c);
+        fillSettingsForm(c);
+    }
+
+    function wireSettingsForm() {
+        var btn = document.getElementById('smb-save');
+        if (!btn) return;
+        var ids = FORM_IDS;
+        fillSettingsForm(getCreds());
+
+        var anonBtn = document.getElementById('smb-anon');
         if (anonBtn) anonBtn.addEventListener('click', function () { anonState = !anonState; paintAnon(); });
 
         btn.addEventListener('click', function () {
@@ -333,8 +353,14 @@ var SMB = (function () {
 
     return {
         openBrowser:     openBrowser,
+        // Exposed for server.js: the local-file relay lives in the same
+        // background service, so it needs the same launch-and-wait dance.
+        ensureService:   ensureService,
         getCreds:        getCreds,
         setCreds:        setCreds,
+        // Used by server.js when the share settings are copied off the
+        // transcode server instead of typed in on the remote.
+        applyCreds:      applyCreds,
         streamUrl:       streamUrl,
         dumpServiceLogs: dumpServiceLogs,
         isStreamUrl:     function (u) { return typeof u === 'string' && u.indexOf(BASE + '/smb/stream') === 0; }

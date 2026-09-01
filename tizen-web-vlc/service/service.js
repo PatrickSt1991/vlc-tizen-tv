@@ -11,6 +11,11 @@
  *   GET  /smb/stream?path=/a/b.mkv    → byte stream, honours HTTP Range
  *   GET  /smb/ping                    → { ok:true } liveness check
  *
+ * It also hosts the optional *local relay* (see the block near the bottom):
+ * a second listener, on the LAN rather than loopback, that serves files off
+ * the TV's own USB drive to the transcode server — so USB files can get the
+ * same surround / codec treatment as files on the share.
+ *
  * The web app points AVPlay at  http://127.0.0.1:8127/smb/stream?path=...
  * AVPlay then demuxes / seeks exactly like any other HTTP source; seeking
  * arrives as a Range request which we map to an SMB2 READ at offset/length.
@@ -27,6 +32,8 @@
 var http   = require('http');
 var net    = require('net');
 var crypto = require('crypto');
+var fs     = require('fs');
+var os     = require('os');
 
 /* The TV's Node runtime predates Buffer.alloc / Buffer.from (added in Node
  * 4.5/5.10) — it only has the legacy `new Buffer()` constructor. Without this
@@ -881,6 +888,357 @@ function handleStream(req, res, query) {
     });
 }
 
+/* ── local relay: TV-local files, served to the transcode server ─────────────
+ *
+ * Files on a USB drive are physically at the TV, so the transcode box can't
+ * reach them the way it reaches the SMB share — which is why USB files never
+ * got the surround / unsupported-codec treatment.  This listener closes that
+ * gap by turning the relationship around: the TV serves, the box fetches.
+ *
+ * Deliberately a SECOND http.Server rather than another route on the loopback
+ * one.  The loopback server carries the SMB endpoints, and those hold the
+ * user's share credentials — none of that should become reachable from the LAN
+ * just because someone wants to play a USB file.  This one only knows how to
+ * read a file.
+ *
+ * Three things gate it, all of which must hold:
+ *   - the app armed it (POST /local/enable over loopback, which the LAN
+ *     listener does not route, so only the app on this TV can arm it);
+ *   - the request carries the random key the app minted;
+ *   - the path sits under one of the roots tizen.filesystem itself resolved.
+ * Disarmed, the socket isn't even open.
+ * ------------------------------------------------------------------------ */
+var LOCAL_PORT  = 8128;
+var localKey    = '';    // '' = disarmed
+var localRoots  = [];    // absolute path prefixes we may read from
+var localServer = null;
+
+/* Constant-time-ish compare so the key can't be probed a character at a time. */
+function localKeyOK(k) {
+    k = String(k || '');
+    if (!localKey || k.length !== localKey.length) return false;
+    var diff = 0;
+    for (var i = 0; i < localKey.length; i++) diff |= localKey.charCodeAt(i) ^ k.charCodeAt(i);
+    return diff === 0;
+}
+
+/* Turn the requested path into an absolute path we're allowed to read, or null.
+ * Accepts the file:// URIs the app already carries around as well as bare
+ * paths.  The query parser has already percent-decoded once, so we don't decode
+ * again here — a second pass would let a doubly-encoded path smuggle characters
+ * past this check.  Traversal is rejected outright rather than normalised away;
+ * there's no legitimate '..' in a path that came from tizen.filesystem. */
+function localResolve(p) {
+    var s = String(p || '');
+    s = s.replace(/^file:\/\//, '');
+    if (!s || s.charAt(0) !== '/' || s.indexOf('\0') >= 0) return null;
+    var parts = s.split('/');
+    for (var i = 0; i < parts.length; i++) if (parts[i] === '..') return null;
+    for (var j = 0; j < localRoots.length; j++) {
+        var r = localRoots[j];
+        if (s === r || s.indexOf(r + '/') === 0) return s;
+    }
+    return null;
+}
+
+/* The address to advertise to the transcode server. os.networkInterfaces() is
+ * the honest answer — asking the web layer for the TV's IP means guessing which
+ * of the several Tizen APIs this firmware actually implements, and the process
+ * that's doing the listening already knows. */
+function lanAddress() {
+    var ifs, best = '';
+    try { ifs = os.networkInterfaces() || {}; } catch (e) { return ''; }
+    for (var name in ifs) {
+        var list = ifs[name] || [];
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i];
+            if (!a || a.internal) continue;
+            if (a.family !== 'IPv4' && a.family !== 4) continue;
+            if (!best) best = a.address;
+            if (/^(eth|en)/.test(name)) return a.address;   // wired wins over wlan
+        }
+    }
+    return best;
+}
+
+function localURL() {
+    var ip = lanAddress();
+    return ip ? 'http://' + ip + ':' + LOCAL_PORT : '';
+}
+
+/* GET/HEAD /local/stream?path=…&key=… — the only thing on the LAN listener. */
+function handleLocalStream(req, res, query) {
+    if (!localKeyOK(query.key)) { cors(res, 403, 'text/plain'); return res.end('forbidden'); }
+    var path = localResolve(query.path);
+    if (!path) { log('LOCAL_REJECT', query.path); cors(res, 403, 'text/plain'); return res.end('path not allowed'); }
+
+    var st;
+    try { st = fs.statSync(path); } catch (e) { cors(res, 404, 'text/plain'); return res.end('not found'); }
+    if (!st.isFile()) { cors(res, 404, 'text/plain'); return res.end('not a file'); }
+    var size = st.size;
+
+    var start = 0, end = size - 1, partial = false;
+    var range = req.headers.range;
+    if (range) {
+        var m = /bytes=(\d*)-(\d*)/.exec(range);
+        if (m) {
+            partial = true;
+            if (m[1] !== '') start = parseInt(m[1], 10);
+            if (m[2] !== '') end   = parseInt(m[2], 10);
+            if (m[1] === '' && m[2] !== '') { start = size - parseInt(m[2], 10); end = size - 1; }
+        }
+    }
+    if (start < 0) start = 0;
+    if (end >= size) end = size - 1;
+    if (start > end || start >= size) {
+        cors(res, 416, 'text/plain', { 'Content-Range': 'bytes */' + size });
+        return res.end();
+    }
+
+    var headers = {
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(end - start + 1),
+        'Content-Type': contentType(path)
+    };
+    if (partial) headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + size;
+    cors(res, partial ? 206 : 200, headers['Content-Type'], headers);
+    if (req.method === 'HEAD') return res.end();
+
+    // createReadStream handles backpressure and closes the fd on both ends.
+    var stream = fs.createReadStream(path, { start: start, end: end });
+    stream.on('error', function (e) { log('LOCAL_READ_ERR', e && e.message); try { res.end(); } catch (e2) {} });
+    req.on('close', function () { try { stream.destroy(); } catch (e) {} });
+    stream.pipe(res);
+}
+
+/* POST /local/enable { key, roots:[…] } — loopback only, by construction. */
+function handleLocalEnable(req, res) {
+    var raw = '';
+    req.on('data', function (c) { raw += c; });
+    req.on('end', function () {
+        var body;
+        try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
+        var key = String(body.key || '');
+        if (key.length < 16) return sendJson(res, 400, { ok: false, error: 'key too short' });
+
+        var roots = [];
+        for (var i = 0; i < (body.roots || []).length; i++) {
+            var r = String(body.roots[i] || '').replace(/^file:\/\//, '').replace(/\/+$/, '');
+            if (r.charAt(0) === '/' && r.split('/').indexOf('..') < 0) roots.push(r);
+        }
+        if (!roots.length) return sendJson(res, 400, { ok: false, error: 'no usable roots' });
+
+        localKey = key;
+        localRoots = roots;
+
+        // Re-arming while already listening just swaps the key and roots.
+        if (localServer) return sendJson(res, 200, { ok: true, url: localURL(), roots: roots });
+
+        try {
+            localServer = http.createServer(function (rq, rs) {
+                var u = require('url').parse(rq.url, true);
+                if (rq.method === 'OPTIONS') { cors(rs, 204, 'text/plain'); return rs.end(); }
+                if (u.pathname === '/local/stream' && (rq.method === 'GET' || rq.method === 'HEAD'))
+                    return handleLocalStream(rq, rs, u.query);
+                cors(rs, 404, 'text/plain'); rs.end('Not Found');
+            });
+            localServer.on('error', function (e) {
+                log('LOCAL_LISTEN_ERR', e && e.message);
+                localServer = null;
+            });
+            localServer.listen(LOCAL_PORT, '0.0.0.0', function () {
+                log('LOCAL_RELAY_LISTENING', '0.0.0.0:' + LOCAL_PORT + ' roots=' + roots.join(','));
+                sendJson(res, 200, { ok: true, url: localURL(), roots: roots });
+            });
+        } catch (e) {
+            log('LOCAL_LISTEN_THREW', e && e.message);
+            localServer = null;
+            sendJson(res, 500, { ok: false, error: 'could not open a LAN port: ' + (e && e.message) });
+        }
+    });
+}
+
+function handleLocalDisable(req, res) {
+    localKey = '';
+    localRoots = [];
+    if (localServer) { try { localServer.close(); } catch (e) {} localServer = null; }
+    log('LOCAL_RELAY_STOPPED');
+    sendJson(res, 200, { ok: true });
+}
+
+/* ── LAN discovery: find the transcode server without a pairing code ─────────
+ *
+ * Pairing used to mean reading a random code off one screen and typing it into
+ * another, with a round trip through a public ntfy topic to link two boxes
+ * sitting on the same switch.  The TV can just look instead: this service knows
+ * its own address and netmask, so it can sweep the subnet and ask whoever
+ * answers whether they're a transcode server.
+ *
+ * Two phases, because a full HTTP request per address is wasteful when almost
+ * every address is dead: first a plain TCP connect (a dead host costs one
+ * timeout, a live one answers or refuses immediately), then GET /api/hello only
+ * on the handful that opened.
+ * ------------------------------------------------------------------------- */
+var SCAN_PORT        = 8200;   // the transcode server's default
+var SCAN_BATCH       = 48;     // concurrent sockets; the TV's stack is not generous
+var SCAN_CONNECT_MS  = 500;    // per-address TCP timeout
+var SCAN_HTTP_MS     = 2500;   // per-candidate HTTP timeout
+var SCAN_MAX_HOSTS   = 1024;   // refuse to sweep something enormous
+
+/* Turn "192.168.1.37" + "255.255.255.0" into every host address on that subnet,
+ * minus the network, broadcast and our own address. Returns null when the mask
+ * is too wide to sweep politely — the caller then tells the user to type the
+ * address instead of hammering 65k hosts. */
+function subnetHosts(ip, mask) {
+    function toInt(a) {
+        var p = String(a || '').split('.');
+        if (p.length !== 4) return -1;
+        var n = 0;
+        for (var i = 0; i < 4; i++) {
+            var v = parseInt(p[i], 10);
+            if (!(v >= 0 && v <= 255)) return -1;
+            n = (n * 256) + v;
+        }
+        return n;
+    }
+    // Addresses are kept as plain numbers, not bit patterns: anything from
+    // 128.0.0.0 up exceeds 2^31, and JavaScript's bitwise operators would
+    // silently reinterpret it as a negative int32.  `>>> 0` puts the two
+    // genuinely bitwise steps back into unsigned space; the rest is arithmetic.
+    function toStr(n) {
+        return [Math.floor(n / 16777216) % 256, Math.floor(n / 65536) % 256,
+                Math.floor(n / 256) % 256, n % 256].join('.');
+    }
+    var ipN = toInt(ip), maskN = toInt(mask);
+    if (ipN < 0 || maskN < 0) return null;
+
+    var network = (ipN & maskN) >>> 0;
+    var size = ((~maskN) >>> 0) + 1;        // addresses in the subnet
+    if (size < 4 || size > SCAN_MAX_HOSTS) return null;
+
+    var out = [];
+    for (var i = 1; i < size - 1; i++) {    // skip network + broadcast
+        var addr = network + i;
+        if (addr !== ipN) out.push(toStr(addr));
+    }
+    return out;
+}
+
+/* Our own IPv4 interfaces, as {address, netmask} — the scan origin. */
+function localIPv4s() {
+    var out = [], ifs;
+    try { ifs = os.networkInterfaces() || {}; } catch (e) { return out; }
+    for (var name in ifs) {
+        var list = ifs[name] || [];
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i];
+            if (!a || a.internal) continue;
+            if (a.family !== 'IPv4' && a.family !== 4) continue;
+            out.push({ address: a.address, netmask: a.netmask || '255.255.255.0', name: name });
+        }
+    }
+    return out;
+}
+
+/* Phase 1: is anything listening on host:port? cb(true|false), never throws. */
+function probePort(host, port, cb) {
+    var done = false, sock;
+    function finish(open) {
+        if (done) return;
+        done = true;
+        try { if (sock) sock.destroy(); } catch (e) {}
+        cb(open);
+    }
+    try {
+        sock = net.connect(port, host, function () { finish(true); });
+        sock.setTimeout(SCAN_CONNECT_MS, function () { finish(false); });
+        sock.on('error', function () { finish(false); });
+    } catch (e) { finish(false); }
+}
+
+/* Phase 2: is it one of ours? cb(server|null). */
+function probeHello(host, port, cb) {
+    var done = false, req;
+    function finish(v) { if (done) return; done = true; cb(v); }
+    try {
+        req = http.get({ host: host, port: port, path: '/api/hello', agent: false }, function (res) {
+            if (res.statusCode !== 200) { res.resume(); return finish(null); }
+            var body = '';
+            res.on('data', function (c) { body += c; if (body.length > 8192) finish(null); });
+            res.on('end', function () {
+                var j = null;
+                try { j = JSON.parse(body); } catch (e) {}
+                if (!j || j.app !== 'vlc-tv-transcode') return finish(null);
+                finish({
+                    url:        'http://' + host + ':' + port,
+                    host:       host,
+                    port:       port,
+                    name:       j.name || host,
+                    api:        j.api || 0,
+                    configured: !!j.configured,
+                    canAdopt:   !!j.canAdopt
+                });
+            });
+        });
+        req.setTimeout(SCAN_HTTP_MS, function () { try { req.abort(); } catch (e) {} finish(null); });
+        req.on('error', function () { finish(null); });
+    } catch (e) { finish(null); }
+}
+
+/* Walk `items` SCAN_BATCH at a time, calling work(item, done) for each. */
+function eachLimited(items, limit, work, allDone) {
+    var i = 0, active = 0, finished = false;
+    if (!items.length) return allDone();
+    function pump() {
+        while (active < limit && i < items.length) {
+            active++;
+            work(items[i++], function () {
+                active--;
+                if (i >= items.length && active === 0) {
+                    if (!finished) { finished = true; allDone(); }
+                } else pump();
+            });
+        }
+    }
+    pump();
+}
+
+/* GET /discover[?port=8200] — sweep every local subnet and report what answers. */
+function handleDiscover(req, res, query) {
+    var port = parseInt(query.port, 10) || SCAN_PORT;
+    var ifaces = localIPv4s();
+    if (!ifaces.length) return sendJson(res, 200, { ok: false, error: 'this TV has no LAN address' });
+
+    var hosts = [], skipped = [];
+    for (var i = 0; i < ifaces.length; i++) {
+        var list = subnetHosts(ifaces[i].address, ifaces[i].netmask);
+        if (!list) { skipped.push(ifaces[i].address + '/' + ifaces[i].netmask); continue; }
+        for (var j = 0; j < list.length; j++) if (hosts.indexOf(list[j]) < 0) hosts.push(list[j]);
+    }
+    if (!hosts.length) {
+        return sendJson(res, 200, {
+            ok: false,
+            error: skipped.length ? 'network too large to scan (' + skipped.join(', ') + ')'
+                                  : 'no scannable network found'
+        });
+    }
+
+    log('DISCOVER_START', hosts.length + ' hosts on port ' + port);
+    var open = [];
+    eachLimited(hosts, SCAN_BATCH, function (host, done) {
+        probePort(host, port, function (isOpen) { if (isOpen) open.push(host); done(); });
+    }, function () {
+        log('DISCOVER_OPEN', open.length + ' host(s) listening');
+        var found = [];
+        eachLimited(open, 8, function (host, done) {
+            probeHello(host, port, function (srv) { if (srv) found.push(srv); done(); });
+        }, function () {
+            log('DISCOVER_DONE', found.length + ' server(s)');
+            sendJson(res, 200, { ok: true, servers: found, scanned: hosts.length });
+        });
+    });
+}
+
 var server = http.createServer(function (req, res) {
     var u = require('url').parse(req.url, true);
     if (req.method === 'OPTIONS') { cors(res, 204, 'text/plain'); return res.end(); }
@@ -890,6 +1248,16 @@ var server = http.createServer(function (req, res) {
     if (u.pathname === '/smb/connect' && req.method === 'POST') return handleConnect(req, res);
     if (u.pathname === '/smb/list')        return handleList(req, res, u.query);
     if (u.pathname === '/smb/stream')      return handleStream(req, res, u.query);
+
+    // Local relay control plane — only reachable on loopback, because the LAN
+    // listener above doesn't route these paths.
+    if (u.pathname === '/local/enable' && req.method === 'POST')  return handleLocalEnable(req, res);
+    if (u.pathname === '/local/disable' && req.method === 'POST') return handleLocalDisable(req, res);
+    if (u.pathname === '/local/status')
+        return sendJson(res, 200, { ok: true, enabled: !!localServer, url: localServer ? localURL() : '' });
+
+    // LAN discovery — replaces typing a pairing code between two screens.
+    if (u.pathname === '/discover') return handleDiscover(req, res, u.query);
 
     cors(res, 404, 'text/plain'); res.end('Not Found');
 });

@@ -637,10 +637,27 @@
         // is in an idle state before open() and would error with INVALID_STATE.
         // The proper setDisplayRect happens after prepareAsync succeeds.
         setTimeout(function () {
-            Player.open(uri, {
-                title:     title,
-                subtitles: opts.subtitles || [],
-                file:      opts.file || null
+            // A USB / internal file may be routed through the paired transcode
+            // server (for surround, or a codec the TV can't decode).  That
+            // changes which URL AVPlay opens, not the identity of what's
+            // playing — `uri` stays the key for recents, resume, watched and
+            // subtitle lookup, and the resolver hands back `uri` unchanged
+            // whenever routing isn't on or isn't available.
+            var resolve = (typeof TranscodeServer !== 'undefined' && TranscodeServer.resolvePlaybackUri)
+                ? TranscodeServer.resolvePlaybackUri
+                : function (u, done) { done(u); };
+            resolve(uri, function (openUrl) {
+                // Arming the relay is async; the user may have backed out or
+                // started something else in the meantime.
+                if (state.playingUri !== uri) return;
+                if (openUrl !== uri && typeof Debug !== 'undefined')
+                    Debug.player('routing through transcode server → ' + openUrl);
+                Player.open(openUrl, {
+                    title:     title,
+                    subtitles: opts.subtitles || [],
+                    file:      opts.file || null,
+                    sourceUri: uri
+                });
             });
         }, 50);
 
@@ -1683,7 +1700,12 @@
 
     // Public hooks used by js/smb.js to hand SMB playback back to the app so it
     // reuses next/prev, auto-play, recent & watched tracking.
-    window.VlcApp = { play: playFromList, home: backToHome, openSettings: openSettings };
+    window.VlcApp = {
+        play: playFromList, home: backToHome, openSettings: openSettings,
+        // server.js uses this to let the user choose when a LAN scan turns up
+        // more than one transcode server.
+        openPicker: openPicker
+    };
 
     if (document.readyState === 'loading')
         document.addEventListener('DOMContentLoaded', init);

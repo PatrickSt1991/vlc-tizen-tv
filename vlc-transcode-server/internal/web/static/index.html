@@ -89,6 +89,21 @@
       </div>
       <label>Password</label><input type="password" id="pass" placeholder="••••••• (blank = unchanged)">
     </div>
+    <div class="toggle" style="margin-top:14px">
+      <span>Let a paired TV copy these settings</span>
+      <div class="switch" id="adopt"><i></i></div>
+    </div>
+    <p class="sub" style="margin:8px 0 0">
+      Saves typing the share, username and password again on a TV remote — the TV
+      pulls them from here when it pairs. They're only on offer for ten minutes
+      after this box starts, after you save the share, or after you press the
+      button below; outside that window the password isn't handed out at all.
+      Turn the switch off to never hand it out.
+    </p>
+    <div class="bar">
+      <button class="ghost" id="allow-adopt">Allow pairing for 10 minutes</button>
+      <span class="sub" id="adopt-state" style="align-self:center">…</span>
+    </div>
     <div class="bar">
       <button class="primary" id="save">Save</button>
       <button class="ghost" id="test">Test connection</button>
@@ -99,13 +114,59 @@
   </div>
 
   <div class="card">
-    <h2>Pair with TV</h2>
-    <p class="sub" style="margin:0 0 10px">On the TV: <b>Settings → Transcode server → Pair</b>. Enter the code it shows here.</p>
-    <div class="row">
-      <div><label>TV pairing code</label><input type="text" id="code" placeholder="e.g. 7gk2p9qx1m"></div>
-      <div style="flex:0 0 auto;display:flex;align-items:flex-end"><button class="primary" id="pair">Pair</button></div>
+    <h2>Playback</h2>
+    <p class="sub" style="margin:0 0 12px">
+      Playback settings live on the TV, under
+      <b>Settings → Transcode server</b> — that's where you are when you notice the
+      sound is wrong. They're shown here so you can see what the box is doing.
+    </p>
+    <div class="kv"><span>Surround sound</span><span class="pill" id="pb-surround">…</span></div>
+    <div class="kv"><span>USB files from the TV</span><span class="pill" id="pb-relay">…</span></div>
+
+    <div class="toggle" style="margin-top:16px">
+      <span>Allow the TV to send USB / internal files</span>
+      <div class="switch" id="localrelay"><i></i></div>
     </div>
-    <div class="msg" id="pairmsg"></div>
+    <p class="sub" style="margin:8px 0 0">
+      A paired TV turns this on for itself when you enable
+      <b>Play USB files through the server</b> there. Switch it off here to revoke
+      that — the box will stop accepting files from the TV and go back to reading
+      only from the share.
+    </p>
+    <div class="bar">
+      <button class="primary" id="save-playback">Save</button>
+    </div>
+    <div class="msg" id="pbmsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Pair with TV</h2>
+    <p class="sub" style="margin:0 0 6px">
+      Nothing to do here. On the TV, open
+      <b>Settings → Transcode server → Find server on my network</b> — it sweeps
+      your LAN, finds this box, pairs, and copies the share settings above.
+    </p>
+    <p class="sub" style="margin:0 0 14px">
+      If the scan comes up empty (guest Wi-Fi, VLANs, a subnet wider than /22),
+      pick <b>Enter server address</b> on the TV and type
+      <b id="pair-addr">this box's address</b>.
+    </p>
+
+    <details>
+      <summary style="cursor:pointer;color:var(--mut);font-size:13px">Pair with a code instead</summary>
+      <p class="sub" style="margin:10px 0">
+        The original method, kept for networks where the TV can't reach this box
+        directly. It relays through ntfy.sh, so it needs internet on both ends.
+        On the TV: <b>Settings → Transcode server → Pair with a code</b>, then
+        type the code it shows here <i>before</i> pressing Pair on the TV.
+      </p>
+      <div class="row">
+        <div><label>TV pairing code</label><input type="text" id="code" placeholder="e.g. 7gk2p9qx1m"></div>
+        <div style="flex:0 0 auto;display:flex;align-items:flex-end"><button class="primary" id="pair">Pair</button></div>
+      </div>
+      <div class="msg" id="pairmsg"></div>
+    </details>
+
     <!-- Persisted across restarts so the user can see "yes, a TV is paired"
          rather than wondering if they need to re-pair after every upgrade. -->
     <p class="sub" id="lastpair" style="margin:8px 0 0;display:none"></p>
