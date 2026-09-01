@@ -140,3 +140,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           # Don't overwrite the body/title the maintainer set on the tag.
           generate_release_notes: false
+          # The "Latest" badge belongs to the TV app — that's what people come
+          # to the releases page for. Without this, GitHub hands it to whatever
+          # was published most recently, so every transcode-v* tag quietly stole
+          # it from the .wgt release.
+          make_latest: false
