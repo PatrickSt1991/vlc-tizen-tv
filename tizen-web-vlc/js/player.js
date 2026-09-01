@@ -901,17 +901,22 @@ var Player = (function () {
             var po2 = document.getElementById('player-object');
             if (po2) po2.style.display = 'block';
 
+            // In parallel with avOpen: scan the file for embedded text
+            // subtitle tracks (MP4 / MKV / WebM) and route them through the
+            // working external-subtitle pipeline.  No-op for unsupported
+            // containers.  Keyed off opts.sourceUri rather than url so it
+            // still fires when a local file is being *played* through the
+            // transcode server — then `url` is an HLS manifest with no
+            // container to sniff, while the bytes still come from the Tizen
+            // File handle in opts.file.
+            var subsSourceUri = opts.sourceUri || url;
+            if (isLocalUrl(subsSourceUri)) extractAndAppendEmbeddedSubs(subsSourceUri, opts.file);
+
             // For local files routed to AVPlay (currently: .mkv), supply a
             // fallback so we degrade gracefully to HTML5 if AVPlay can't
             // open the path or never actually decodes. Network URLs get
             // no fallback — they surface errors normally.
             if (isLocalUrl(url)) {
-                // In parallel with avOpen: scan the file for embedded text
-                // subtitle tracks (MP4 / MKV / WebM) and route them through
-                // the working external-subtitle pipeline.  No-op for
-                // unsupported containers.
-                extractAndAppendEmbeddedSubs(url, opts.file);
-
                 avOpen(url, function (reason) {
                     // For MKV there's no point falling back to the HTML5
                     // <video> element — Tizen's chromium can't demux Matroska,
@@ -1070,6 +1075,20 @@ var Player = (function () {
         return /\b(dts|dca|truehd|mlp)/i.test(String(codec || ''));
     }
 
+    /* Audio the TV can decode but can't hand to a soundbar untouched.
+     *
+     * HDMI-ARC / optical carry either LPCM or an IEC 61937-framed bitstream,
+     * and only Dolby Digital / DD+ have that framing here.  Anything else —
+     * FLAC, AAC, PCM, Vorbis, Opus — the TV decodes itself, and what leaves the
+     * set is LPCM, which plain ARC only carries as 2.0.  So a 5.1 FLAC track
+     * plays fine and still arrives at the soundbar as stereo (issue #63).
+     * Nothing on the TV side can change that; the fix is to re-encode to Dolby
+     * upstream, which the transcode server's surround setting does. */
+    function isDownmixedAudio(codec, channels) {
+        if (!(channels > 2)) return false;
+        return !/\b(ac-?3|eac-?3|e-ac-3|ddp?|dolby)/i.test(String(codec || ''));
+    }
+
     /* AVPlay's extra_info field is a JSON string with fields like
      *   { "language":"eng", "channels":2, "fourCC":"AAC", ... }
      * for audio, and similar for subtitles.  Older firmwares hand back
@@ -1084,15 +1103,16 @@ var Player = (function () {
         if (!obj) {
             // Not JSON — use as-is, and look for a 3-letter ISO code in it
             var m = s.match(/\b([a-z]{2,3})\b/i);
-            return { label: s, lang: m ? m[1].toLowerCase() : '', codec: s };
+            return { label: s, lang: m ? m[1].toLowerCase() : '', codec: s, channels: 0 };
         }
         var lang  = (obj.language || obj.lang || obj.track_lang || '').toString().toLowerCase();
         var codec = (obj.fourCC || obj.codec || '').toString();
         var parts = [];
         if (lang) parts.push(lang.toUpperCase());
         if (codec) parts.push(codec);
-        if (obj.channels) parts.push(obj.channels + 'ch');
-        return { label: parts.join(' · ') || s, lang: lang, codec: codec };
+        var channels = parseInt(obj.channels, 10) || 0;
+        if (channels) parts.push(channels + 'ch');
+        return { label: parts.join(' · ') || s, lang: lang, codec: codec, channels: channels };
     }
 
     // AVPlay sometimes exposes better language tags than the MP4 metadata
@@ -1195,15 +1215,25 @@ var Player = (function () {
                     if (t.type === 'VIDEO') continue;
                     if (t.type === 'AUDIO') {
                         var unsupported = isUndecodableAudioCodec(parsed.codec);
+                        // Not silent, just flattened: multichannel audio in a
+                        // format the TV can't bitstream reaches the soundbar as
+                        // stereo however many channels the file has.  Say so in
+                        // the label rather than leaving the user to wonder.
+                        var downmixed = !unsupported &&
+                                        isDownmixedAudio(parsed.codec, parsed.channels);
+                        var note = unsupported ? ' — not supported by TV'
+                                 : downmixed   ? ' — TV downmixes to stereo'
+                                 : '';
                         out.audio.push({
                             index:  t.index,
                             // Flag codecs the TV can't decode right in the
                             // label so the user knows why a track is silent.
-                            name:   (parsed.label || ('Audio ' + t.index)) +
-                                    (unsupported ? ' — not supported by TV' : ''),
+                            name:   (parsed.label || ('Audio ' + t.index)) + note,
                             lang:   parsed.lang || '',
                             codec:  parsed.codec || '',
+                            channels: parsed.channels || 0,
                             unsupported: unsupported,
+                            downmixed: downmixed,
                             type:   'AVPLAY',
                             active: (t.index === activeAudioIdx)
                         });

@@ -116,18 +116,93 @@ binary uses `h264_videotoolbox` via macOS's hardware encoder.
 
 ## Pair with the TV
 
-On the TV: **Settings → Transcode server → Pair**, then enter the code the TV
-shows into the **Pair with TV** box on this page. The server publishes its LAN
-address + a token to the TV (via the same ntfy pairing channel the app already
-uses), and the TV stores it.
+Fill in your SMB share on this page first (host, share, credentials — **Test
+connection** to confirm). Then, on the TV:
 
-From then on the TV browses your SMB share exactly as before — but when you press
-play, the file streams through this box, transcoded as needed. Nothing else in
-the TV's flow changes; if the server is ever unpaired or offline the TV falls
-back to playing directly.
+**Settings → Transcode server → Find server on my network**
 
-> The server must point at the **same share** the TV browses, so the relative
-> paths line up.
+That's the whole flow. The TV sweeps its own subnet, finds this box, stores the
+pairing, and settles the share settings between the two of you — whichever end
+already knows them tells the other:
+
+| Situation | What happens |
+|---|---|
+| This box has a share configured | The TV copies it down (needs **Let a paired TV copy these settings**, on by default, and the pairing window open — see below) |
+| This box is fresh, the TV already had SMB working | The TV sends its settings up here |
+| Neither has one | Fill the share in on either end; **Send my share settings to the server** on the TV pushes it up later |
+
+So if your TV already browses your NAS, you can skip this page entirely: install
+the box, press *Find server on my network*, done. There is no code to read off
+one screen and into another, and nothing leaves your LAN.
+
+From then on the TV browses your share exactly as before; the only change is
+that pressing play streams through this box, transcoded as needed. If the server
+is ever unpaired or offline the TV falls back to playing directly.
+
+> Because the TV copies the share settings from here, both ends point at the
+> **same share** automatically — which is what makes the relative paths line up.
+> If you turn credential copying off, make sure they match by hand.
+
+### If the scan finds nothing
+
+The sweep only covers the TV's own subnet, and only when that subnet is /22 or
+narrower (a wider one would mean thousands of probes). It also needs the TV and
+this box to be able to reach each other — guest Wi-Fi and AP/client isolation
+routinely block that.
+
+Two fallbacks, in order of preference:
+
+1. **Enter the address by hand.** On the TV, type this box's address into
+   **Settings → Transcode server → Server address** (the Status card above shows
+   it) and press **Connect to this address**. Same result as the scan, no
+   discovery needed — this also covers the case where the box is on a different
+   subnet but still routable.
+2. **Pair with a code.** The original method, under *Pair with a code instead*
+   on this page. It relays through ntfy.sh, so both ends need working internet,
+   and the order matters: enter the TV's code here and press **Pair** *before*
+   pressing **Pair with a code** on the TV.
+
+### The pairing window
+
+The share **password** is the one genuinely sensitive thing this box holds, so
+it isn't simply on offer to anything that asks. `/api/adopt` only answers during
+a ten-minute window, which opens when:
+
+- the box starts,
+- you save the share on this page, or
+- you press **Allow pairing for 10 minutes**.
+
+Every legitimate flow happens inside one of those — you pair the TV minutes
+after installing the box or setting the share up. Outside the window the
+password isn't handed out at all, token or no token. If a TV pairs late, the
+setup page tells you the window is closed; press the button and use **Settings →
+Transcode server → Get share settings from the server** on the TV.
+
+Already-paired TVs are unaffected: they stored the settings when they paired and
+never ask again.
+
+> Why a window rather than "only the first TV to pair gets in"? Because the
+> setup page needs the pairing token for every write it makes — including the
+> button that would let a second device in. Locking the token to one device
+> bricks the page and leaves no way back except editing `config.json` by hand. A
+> window has no such dead end.
+
+### What's exposed on your LAN
+
+Worth being explicit, because the scan-based flow makes it visible: **this box
+treats your LAN as trusted.**
+
+Every `/api` endpoint except `/api/hello` and `/api/status` requires the pairing
+token — but `/api/status` is exactly where a TV reads that token from, so
+anything on your network can read it too. The token check stops accidents
+(another tool poking a URL it found, a stray script, a forgotten browser tab),
+not a determined device on your network. That is why the password sits behind
+the window as well as behind the token, and why you can switch credential
+copying off entirely.
+
+Being able to *play* your own media over your own LAN is the risk the token
+covers, and that's the posture the box has always had. Nothing here is reachable
+from outside your network unless you deliberately forward the port — don't.
 
 ## Verify transcoding (before the TV is involved)
 
@@ -148,6 +223,68 @@ serves the live HLS manifest. A DTS/TrueHD file should now play **with sound**.
 | Video + audio both TV-friendly | **Remux only** (copy/copy) |
 | Only audio is DTS/TrueHD | Copy video, transcode audio → AC3 (5.1) / AAC (stereo) |
 | Video codec unsupported | Hardware-transcode video → H.264, fix audio |
+| Multichannel audio, surround on | Copy video, transcode audio → E-AC-3 / AC-3 5.1 |
+
+## Surround sound (5.1 to a soundbar)
+
+A 5.1 FLAC, AAC or PCM track plays on the TV and still arrives at the soundbar
+as **stereo**. That isn't the TV app downmixing — it's the link. HDMI-ARC and
+optical carry either LPCM or an IEC 61937-framed bitstream, and only Dolby
+Digital and Dolby Digital Plus have that framing. Everything else the TV decodes
+itself, and plain ARC can only carry two channels of the resulting LPCM. FLAC in
+particular has no bitstream form at all, on any device — an external player that
+"sends FLAC 5.1 to the soundbar" is really decoding it and sending multichannel
+LPCM over a link that can carry it.
+
+Nothing in a Tizen app can change that: AVPlay has no channel-layout or
+passthrough control. What *can* change it is re-encoding upstream, here, into a
+format the TV will pass straight through.
+
+Set it on the TV, under **Settings → Transcode server → Surround sound** — the
+setting lives on this box but you change it from the sofa, which is where you
+are when you notice the soundbar is doing stereo. This page shows the current
+value under *Playback*.
+
+| Setting | What happens |
+|---|---|
+| **Off** (default) | Only audio the TV can't decode is touched. 5.1 FLAC/AAC still reaches the soundbar as stereo. |
+| **Dolby Digital Plus 5.1** | Any multichannel track that isn't already AC-3/E-AC-3 is re-encoded to E-AC-3 at 768 kbps. Best quality; needs a DD+ capable soundbar. |
+| **Dolby Digital 5.1** | Same, targeting AC-3 at 640 kbps. Use this if your receiver won't take DD+. |
+
+Tracks that are *already* AC-3 or E-AC-3 are copied untouched either way, and
+stereo sources are never re-encoded just because the setting is on.
+
+Two things worth knowing:
+
+- This is a lossy re-encode. A lossless FLAC 5.1 track becomes Dolby 5.1 — you
+  keep the channels, not the bit-exactness. There is no route that keeps both;
+  the TV cannot pass lossless multichannel to a soundbar.
+- Set your TV's **Sound → Expert Settings → Digital Output Audio Format** to
+  *Pass-through* (or Auto), or it will decode the Dolby stream and downmix it
+  again on the way out.
+
+## USB and internal-storage files
+
+Files on a USB stick are physically at the TV, so this box can't read them the
+way it reads the share — which is why they used to miss out on both the
+surround handling and the unsupported-codec handling.
+
+Turn on **Settings → Transcode server → Play USB files through the server** on
+the TV and the direction reverses for those files: the TV app's background
+service opens a small read-only listener on your LAN, and hands this box a URL
+pointing at it. The box fetches, transcodes, and streams HLS back exactly as it
+does for share files.
+
+The TV asks this box for permission as part of that switch, so there's nothing to
+do here — the *Allow the TV to send USB / internal files* toggle on this page is
+how you **revoke** it. It's off until a TV turns it on. The TV's listener is
+armed only while the app is running, only serves paths under the drives
+`tizen.filesystem` itself reported, and requires a random per-TV key that the
+box receives in the URL. On this side, a `src=` URL is only accepted from a
+paired TV, and only when it names a private LAN address — the pairing token
+can't be used to make the box fetch from somewhere else.
+
+If either side is off, USB files simply play the way they always did.
 
 ## Hardware acceleration
 
@@ -179,3 +316,7 @@ ffmpeg reports and falls back to software (`libx264`). Detection order:
   separately).
 - One active stream per file; the box transcodes in real time, so a weak CPU may
   not keep up with software encoding of heavy 4K video.
+- Surround targets 5.1. A 7.1 source is folded down to 5.1 (both AC-3 and E-AC-3
+  encoders top out there), and lossless formats stay lossy after the re-encode.
+- USB relay needs the TV app to be open — it's the app's background service that
+  serves the file, so the box can't pull from a TV sitting in standby.

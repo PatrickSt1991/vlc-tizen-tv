@@ -23,18 +23,25 @@ const idleTimeout = 90 * time.Second
 // (Injected so this package doesn't import the web/http layer.)
 type RawURLFunc func(smbPath string) string
 
+// SurroundFunc reports the currently configured surround mode. It's a func
+// rather than a value because the setting is web-editable while the server
+// runs, and we want the next play to honour the new setting without a restart.
+type SurroundFunc func() string
+
 // Manager owns the working directory and the live session set.
 type Manager struct {
-	caps    *Caps
-	workDir string
-	rawURL  RawURLFunc
+	caps     *Caps
+	workDir  string
+	rawURL   RawURLFunc
+	surround SurroundFunc
 
 	mu       sync.Mutex
 	sessions map[string]*session
 }
 
-// NewManager wires the manager and starts the idle-reaper goroutine.
-func NewManager(caps *Caps, workDir string, rawURL RawURLFunc) (*Manager, error) {
+// NewManager wires the manager and starts the idle-reaper goroutine. surround
+// may be nil, in which case the surround policy is permanently off.
+func NewManager(caps *Caps, workDir string, rawURL RawURLFunc, surround SurroundFunc) (*Manager, error) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -43,20 +50,68 @@ func NewManager(caps *Caps, workDir string, rawURL RawURLFunc) (*Manager, error)
 	for _, e := range entries {
 		os.RemoveAll(e)
 	}
-	m := &Manager{caps: caps, workDir: workDir, rawURL: rawURL, sessions: map[string]*session{}}
+	m := &Manager{caps: caps, workDir: workDir, rawURL: rawURL, surround: surround, sessions: map[string]*session{}}
 	go m.reap()
 	return m, nil
+}
+
+// Source is what one session reads from. Exactly one of the two fields is set:
+// SMBPath for a file on the configured share (bridged through /raw), or URL for
+// a file the box can already fetch over HTTP — currently the TV's own USB/local
+// relay, so files sitting on a drive plugged into the TV get the same treatment
+// as files on the share.
+type Source struct {
+	SMBPath string
+	URL     string
+}
+
+// SMBSource / HTTPSource are the two constructors, so callers can't build a
+// Source with both (or neither) field set by accident.
+func SMBSource(path string) Source { return Source{SMBPath: path} }
+func HTTPSource(url string) Source { return Source{URL: url} }
+
+// key identifies the source for the session map and the work directory.
+func (s Source) key() string {
+	if s.URL != "" {
+		return "url:" + s.URL
+	}
+	return "smb:" + s.SMBPath
+}
+
+// Label is the short human form used in logs and error messages.
+func (s Source) Label() string {
+	if s.URL != "" {
+		return s.URL
+	}
+	return s.SMBPath
+}
+
+// input resolves what ffmpeg actually opens.
+func (m *Manager) input(s Source) string {
+	if s.URL != "" {
+		return s.URL
+	}
+	return m.rawURL(s.SMBPath)
+}
+
+// surroundMode reads the live setting, normalised.
+func (m *Manager) surroundMode() string {
+	if m.surround == nil {
+		return SurroundOff
+	}
+	return NormaliseSurround(m.surround())
 }
 
 // Caps exposes the probed capabilities (for the status page).
 func (m *Manager) Caps() *Caps { return m.caps }
 
-// EnsureSession returns a ready session for the given SMB path, starting ffmpeg
+// EnsureSession returns a ready session for the given source, starting ffmpeg
 // (after probing + deciding) if one isn't already running. It blocks until the
 // first segment exists so the caller can immediately redirect AVPlay to the
 // playlist.
-func (m *Manager) EnsureSession(ctx context.Context, smbPath string) (*session, error) {
-	id := idFor(smbPath)
+func (m *Manager) EnsureSession(ctx context.Context, src Source) (*session, error) {
+	surround := m.surroundMode()
+	id := idFor(src.key(), surround)
 
 	m.mu.Lock()
 	if s, ok := m.sessions[id]; ok && !s.isDone() {
@@ -69,15 +124,16 @@ func (m *Manager) EnsureSession(ctx context.Context, smbPath string) (*session, 
 	}
 	m.mu.Unlock()
 
-	in := m.rawURL(smbPath)
+	in := m.input(src)
 
 	// Probe + decide before committing to a session.
 	mi, err := m.caps.Inspect(ctx, in)
 	if err != nil {
 		return nil, fmt.Errorf("probe failed: %w", err)
 	}
-	plan := Decide(mi)
-	log.Printf("transcode %q: %s (codec v=%s a=%s/%dch)", smbPath, plan.Reason, mi.VideoCodec, mi.AudioCodec, mi.AudioChans)
+	plan := Decide(mi, surround)
+	log.Printf("transcode %q: %s (codec v=%s a=%s/%dch, surround=%s)",
+		src.Label(), plan.Reason, mi.VideoCodec, mi.AudioCodec, mi.AudioChans, surround)
 
 	dir := filepath.Join(m.workDir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -86,7 +142,7 @@ func (m *Manager) EnsureSession(ctx context.Context, smbPath string) (*session, 
 
 	sctx, cancel := context.WithCancel(context.Background())
 	s := &session{
-		ID: id, SrcPath: smbPath, Dir: dir, Plan: plan,
+		ID: id, SrcPath: src.Label(), Dir: dir, Plan: plan,
 		cancel: cancel, logTail: newRing(60), lastAccess: nowFn(),
 	}
 

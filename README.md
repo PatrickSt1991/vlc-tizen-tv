@@ -165,6 +165,42 @@ video untouched and only re-encode audio — quick even on a Raspberry Pi:
 ffmpeg -i input.mkv -c:v copy -c:a ac3 -b:a 640k output.mkv
 ```
 
+## 5.1 surround reaches the soundbar as stereo
+
+A 5.1 FLAC, AAC or PCM track plays fine and still comes out of the soundbar in
+stereo. That's the HDMI link, not the app. ARC and optical carry either LPCM or
+an IEC 61937-framed bitstream, and only Dolby Digital and Dolby Digital Plus
+have that framing — everything else the TV decodes itself, and plain ARC can
+only carry two channels of the resulting LPCM. FLAC has no bitstream form at
+all, on any device: an external player that "sends FLAC 5.1 to the soundbar" is
+decoding it and sending multichannel LPCM over a link that can carry it.
+
+AVPlay gives an app no channel-layout or passthrough control, so no version of
+VLC TV can fix this on the TV. The two things that do work:
+
+- **Let the [transcode server](vlc-transcode-server/) re-encode it.** Point the
+  TV at it with **Settings → Transcode server → Find server on my network** — it
+  sweeps your LAN, pairs, and sorts the share settings out between the two ends
+  by itself. No pairing code, no internet. Then, in the same menu, set
+  **Surround sound** to Dolby Digital Plus 5.1: multichannel tracks get
+  re-encoded into something the TV passes straight through, keeping all six
+  channels. **Play USB files through the server** does the same for files on a
+  USB stick.
+- **Re-encode the file once yourself**, if you'd rather not run anything:
+
+  ```bash
+  ffmpeg -i input.mkv -c:v copy -c:a eac3 -b:a 768k -ac 6 output.mkv
+  ```
+
+Either way it's a lossy re-encode — you keep the channels, not the
+bit-exactness. And set the TV's **Sound → Expert Settings → Digital Output
+Audio Format** to *Pass-through* / Auto, or it will decode the Dolby stream and
+downmix it again on the way out.
+
+In the audio-track picker, a track that will be flattened this way is labelled
+**"TV downmixes to stereo"**, so you can tell it apart from one the TV can't
+decode at all.
+
 ## Cast a link from your phone, tablet or laptop
 
 Typing URLs on a TV remote is painful, so VLC TV lets you paste a stream URL
