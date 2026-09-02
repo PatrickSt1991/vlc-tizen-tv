@@ -76,22 +76,71 @@ var Player = (function () {
         return avplay;
     }
 
+    /* The user's aspect/zoom choice, resolved from Settings each time so a
+     * change from the OSD or the settings view takes effect on the next
+     * apply without the player caching a stale mode. */
+    function aspect() {
+        if (typeof AspectRatio === 'undefined') return { av: 'PLAYER_DISPLAY_MODE_LETTER_BOX', fit: 'contain', zoom: 1 };
+        return AspectRatio.current();
+    }
+
     function avSetDisplayRect() {
+        var w = window.innerWidth  || screen.width  || 1920;
+        var h = window.innerHeight || screen.height || 1080;
+        var z = aspect().zoom || 1;
         try {
-            var w = window.innerWidth  || screen.width  || 1920;
-            var h = window.innerHeight || screen.height || 1080;
+            if (z !== 1) {
+                /* Zoom past the frame edge: hand AVPlay a rect bigger than
+                 * the screen, centred, so the overflow falls outside the
+                 * panel.  This is the only way to crop bars that are baked
+                 * into the video frames — no display method can do it. */
+                var zw = Math.round(w * z), zh = Math.round(h * z);
+                var zx = Math.round((w - zw) / 2), zy = Math.round((h - zh) / 2);
+                av().setDisplayRect(zx, zy, zw, zh);
+                if (typeof Debug !== 'undefined')
+                    Debug.player('AV setDisplayRect zoom ' + z + ' → ' + zx + ',' + zy + ' ' + zw + 'x' + zh);
+                return;
+            }
             av().setDisplayRect(0, 0, w, h);
             if (typeof Debug !== 'undefined') Debug.player('AV setDisplayRect ' + w + 'x' + h);
         } catch (e) {
             if (typeof Debug !== 'undefined') Debug.warn('AV setDisplayRect: ' + e.message);
+            /* Firmware that rejects an off-screen rect: fall back to the
+             * plain full-screen one so we never leave the video unsized. */
+            if (z !== 1) { try { av().setDisplayRect(0, 0, w, h); } catch (e2) {} }
         }
     }
     function avSetDisplayMethod() {
+        var mode = aspect();
         try {
-            av().setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX');
+            av().setDisplayMethod(mode.av);
+            if (typeof Debug !== 'undefined') Debug.player('AV setDisplayMethod ' + mode.av);
         } catch (e) {
-            if (typeof Debug !== 'undefined') Debug.warn('AV setDisplayMethod: ' + e.message);
+            if (typeof Debug !== 'undefined')
+                Debug.warn('AV setDisplayMethod ' + mode.av + ': ' + e.message);
+            // CROPPED_FULL / FULL_SCREEN aren't on every firmware — letterbox
+            // is, and it's the mode the app shipped with.
+            try { av().setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX'); } catch (e2) {}
         }
+    }
+
+    /* HTML5 backend equivalent: object-fit covers cases 1 and 3, a CSS
+     * scale() handles the zoom levels.  body is overflow:hidden, so the
+     * scaled overflow is clipped exactly like the AVPlay rect. */
+    function h5ApplyAspect() {
+        var v = h5el();
+        if (!v) return;
+        var mode = aspect();
+        try {
+            v.style.objectFit = mode.fit;
+            v.style.transform = (mode.zoom && mode.zoom !== 1) ? 'scale(' + mode.zoom + ')' : '';
+        } catch (e) {}
+    }
+
+    /* Push the current aspect/zoom mode onto whichever backend is live. */
+    function applyAspect() {
+        if (backend === BACKEND_AVPLAY)     { avSetDisplayRect(); avSetDisplayMethod(); }
+        else if (backend === BACKEND_HTML5) { h5ApplyAspect(); }
     }
 
     /* All external subtitles (SRT / VTT / ASS / SSA / SMI) are painted by the
@@ -132,13 +181,11 @@ var Player = (function () {
         var bestScore = 0;
         for (var i = 0; i < playerSubtitles.length; i++) {
             var s = playerSubtitles[i];
-            var lang = (s.lang || '').toLowerCase();
-            var nm   = (s.name || '').toLowerCase();
-            var sc = 0;
-            if      (lang === want)                                            sc = 100;
-            else if (lang && want.length === 2 && lang.indexOf(want) === 0)    sc = 90;
-            else if (lang && lang.length === 2 && want.indexOf(lang) === 0)    sc = 90;
-            else if (nm.indexOf(want) >= 0)                                    sc = 50;
+            // Same scorer the CC menu and the audio picker use: language tag,
+            // ISO 639-2 spelling, English name or endonym (settings.js).
+            var sc = (typeof LanguageList !== 'undefined')
+                   ? LanguageList.matchScore(want, s.lang, s.name)
+                   : ((s.lang || '').toLowerCase() === want ? 100 : 0);
             if (sc > bestScore) { bestScore = sc; best = s; }
         }
         return best;
@@ -676,6 +723,7 @@ var Player = (function () {
     function h5Open(url, opts) {
         var v = h5el();
         v.style.display = 'block';
+        h5ApplyAspect();
         // playerSubtitles is set in open() for both backends; keep alias
         h5Subtitles = playerSubtitles;
 
@@ -1103,7 +1151,7 @@ var Player = (function () {
         return 'NONE';
     }
     function setDisplayRect() {
-        if (backend === BACKEND_AVPLAY) avSetDisplayRect();
+        applyAspect();
     }
 
     /* Audio codecs Samsung TVs can't decode in-app, no matter the firmware:
@@ -1232,11 +1280,18 @@ var Player = (function () {
             // file too large, etc.).  When we DID extract working SRTs,
             // suppress the native (broken-on-Tizen-5.0) entries so the
             // user doesn't see duplicates where only one actually works.
-            var hasExtracted = false;
+            var extractedCount = 0;
             for (var ei = 0; ei < playerSubtitles.length; ei++) {
-                if (playerSubtitles[ei]._extracted) { hasExtracted = true; break; }
+                if (playerSubtitles[ei]._extracted) extractedCount++;
             }
+            var hasExtracted = extractedCount > 0;
             var showEmbed = !hasExtracted;
+            // How many text tracks AVPlay itself sees.  When that's more than
+            // we managed to extract, tracks are missing from the menu — the
+            // extractors only handle text subs (S_TEXT/*, tx3g), so PGS /
+            // VobSub image subs and anything unreadable drop out silently.
+            // Counting them lets the menu say so instead of just looking short.
+            var nativeTextCount = 0;
 
             /* Pull the currently-selected track indices so we can mark
              * the matching menu entries as active.  AVPlay returns either
@@ -1284,7 +1339,9 @@ var Player = (function () {
                             type:   'AVPLAY',
                             active: (t.index === activeAudioIdx)
                         });
-                    } else if ((t.type === 'TEXT' || t.type === 'SUBTITLE') && showEmbed) {
+                    } else if (t.type === 'TEXT' || t.type === 'SUBTITLE') {
+                        nativeTextCount++;
+                        if (!showEmbed) continue;
                         out.subtitle.push({
                             index:  'embed:' + t.index,
                             name:   '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
@@ -1311,6 +1368,20 @@ var Player = (function () {
                     lang:   s.lang || '',
                     type:   s._extracted ? 'AVPLAY_EXTRACTED' : 'AVPLAY_EXTERNAL',
                     active: (currentExternalSub === s)
+                });
+            }
+
+            /* Account for tracks the extractor couldn't take.  A muted row is
+             * not selectable (nothing can render them) but it stops the list
+             * from silently under-reporting what's in the file. */
+            if (hasExtracted && nativeTextCount > extractedCount) {
+                var missing = nativeTextCount - extractedCount;
+                out.subtitle.push({
+                    index:  'missing',
+                    name:   '+' + missing + ' embedded track' + (missing === 1 ? '' : 's') +
+                            ' this TV can’t draw (image-based subs)',
+                    muted:  true,
+                    active: false
                 });
             }
 
@@ -1771,6 +1842,7 @@ var Player = (function () {
         setAudioTrack:      setAudioTrack,
         setSubtitleTrack:   setSubtitleTrack,
         setDisplayRect:     setDisplayRect,
+        applyAspect:        applyAspect,
         isBuffering:        isBuffering,
         lastBufferingMs:    lastBufferingMs,
         setSpeed:           setSpeed,
