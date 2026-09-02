@@ -171,7 +171,13 @@ var Player = (function () {
      * back to false on "off" / external / new file. */
     var avNativeSubsAllowed = false;
     function subEl() { return document.getElementById('subtitle-overlay'); }
-    function showSubtitleText(text, durationMs) {
+    /* `runs` is optional and only ever set by the ASS path: a list of
+     * {text, colour, bold, italic, underline, strikeout} spans produced by
+     * AssStyle.  When present the cue is painted as nested <span>s so
+     * per-word colours survive; when absent (SRT/VTT/SMI, or ASS whose
+     * styling is all no-ops) the original single-textContent path runs
+     * unchanged. */
+    function showSubtitleText(text, durationMs, runs) {
         var el = subEl();
         if (!el) {
             if (typeof Debug !== 'undefined') Debug.warn('showSubtitleText: #subtitle-overlay not found');
@@ -200,7 +206,8 @@ var Player = (function () {
             line.className = 'sub-line';
             el.appendChild(line);
         }
-        line.textContent = s;
+        if (runs && runs.length) paintRuns(line, runs);
+        else                     line.textContent = s;
         el.classList.remove('hidden');
         if (typeof Debug !== 'undefined' && window.getComputedStyle) {
             var elCs   = window.getComputedStyle(el);
@@ -239,6 +246,31 @@ var Player = (function () {
         if (d <= 0 || d > 30000) d = 8000;   // safety net + upper bound
         subClearTimer = setTimeout(hideSubtitleText, d);
     }
+    /* Build one <span> per styled run inside the .sub-line wrapper.
+     * textContent (never innerHTML) keeps subtitle files — untrusted input
+     * off the network — from injecting markup, and the wrapper keeps the
+     * optional background box hugging the text.  Newlines inside a run
+     * still break correctly: .sub-line is `white-space: pre-line`, which
+     * the spans inherit. */
+    function paintRuns(line, runs) {
+        line.textContent = '';
+        for (var i = 0; i < runs.length; i++) {
+            var r = runs[i];
+            var sp = document.createElement('span');
+            sp.textContent = r.text;
+            if (r.colour) sp.style.color      = r.colour;
+            if (r.bold)   sp.style.fontWeight = 'bold';
+            if (r.italic) sp.style.fontStyle  = 'italic';
+            if (r.underline || r.strikeout) {
+                var deco = [];
+                if (r.underline) deco.push('underline');
+                if (r.strikeout) deco.push('line-through');
+                sp.style.textDecoration = deco.join(' ');
+            }
+            line.appendChild(sp);
+        }
+    }
+
     function hideSubtitleText() {
         clearTimeout(subClearTimer);
         var el = subEl();
@@ -318,7 +350,8 @@ var Player = (function () {
             Debug.player('extPoll cue change → idx=' + idx +
                          (idx >= 0 ? ' text=' + JSON.stringify((extCues[idx].text || '').slice(0, 60)) : ''));
         if (idx < 0) hideSubtitleText();
-        else         showSubtitleText(extCues[idx].text, 0);   // 0 → no timer
+        else         showSubtitleText(extCues[idx].text, 0,     // 0 → no timer
+                                      extCues[idx].runs);
     }
 
     /* SRT/VTT timecode line, e.g. "00:01:02,500 --> 00:01:05,000" (both ,
@@ -373,13 +406,18 @@ var Player = (function () {
      * firmware, so every ASS subtitle is painted through this poller path.
      *
      * Dialogue line:  Dialogue: Layer,Start,End,Style,Name,ML,MR,MV,Effect,Text
-     * Times are H:MM:SS.cc (centiseconds).  Override tags ({\an8} etc.),
-     * \N / \n line breaks and \h hard-spaces are normalised away. */
+     * Times are H:MM:SS.cc (centiseconds).  \N / \n line breaks and \h
+     * hard-spaces are normalised; override tags that affect *appearance*
+     * (\c colour, \b, \i, \u, \s) become a `runs` list the overlay paints
+     * as spans, and the rest (\an8, \pos, karaoke, drawings) are dropped. */
     function parseAssCues(ass) {
         var out = [];
         var lines = String(ass || '').replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n');
         var fmt = null;
         var inEvents = false;
+        /* [V4+ Styles] gives each cue its default colour and weight; inline
+         * {\c&H..&} overrides are layered on top per cue below. */
+        var assStyles = (typeof AssStyle !== 'undefined') ? AssStyle.forFile(ass) : null;
 
         for (var i = 0; i < lines.length; i++) {
             var l = lines[i].trim();
@@ -416,13 +454,22 @@ var Player = (function () {
             var end   = assTimeToSecs(parts[eI]);
             if (start == null || end == null || end <= start) continue;
 
-            var text = (parts[tI] || '')
-                .replace(/\{[^}]*\}/g, '')   // {\b1}, {\an8}, drawing tags …
-                .replace(/\\N/gi, '\n')      // hard + soft line breaks
-                .replace(/\\h/gi, ' ')       // hard space
-                .replace(/<[^>]+>/g, '')     // stray HTML
-                .trim();
-            if (text) out.push({ start: start, end: end, text: text });
+            var text, runs = null;
+            if (assStyles) {
+                var stI = fmt.indexOf('style');
+                runs = assStyles.runs(parts[tI] || '', stI >= 0 ? parts[stI] : '');
+                text = AssStyle.plainText(runs);
+                // Nothing to draw differently → keep the cheap paint path.
+                if (AssStyle.isPlain(runs)) runs = null;
+            } else {
+                text = (parts[tI] || '')
+                    .replace(/\{[^}]*\}/g, '')   // {\b1}, {\an8}, drawing tags …
+                    .replace(/\\N/gi, '\n')      // hard + soft line breaks
+                    .replace(/\\h/gi, ' ')       // hard space
+                    .replace(/<[^>]+>/g, '')     // stray HTML
+                    .trim();
+            }
+            if (text) out.push({ start: start, end: end, text: text, runs: runs });
         }
         // ASS dialogue lines aren't required to be in chronological order;
         // the poller's scan assumes sorted cues, so sort by start.

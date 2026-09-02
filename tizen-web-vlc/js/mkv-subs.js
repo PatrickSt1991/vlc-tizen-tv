@@ -101,6 +101,7 @@ var MkvSubs = (function () {
     var ID_TRACKTYPE     = 0x83;
     var ID_CODECID       = 0x86;
     var ID_LANGUAGE      = 0x22B59C;
+    var ID_CODECPRIVATE  = 0x63A2;
     var ID_CLUSTER       = 0x1F43B675;
     var ID_TIMECODE      = 0xE7;
     var ID_SIMPLEBLOCK   = 0xA3;
@@ -110,13 +111,16 @@ var MkvSubs = (function () {
 
     /* ── Track entry parser (returns subtitle tracks only) ───────────── */
     function parseTrackEntry(view, off, end) {
-        var t = { number: 0, type: 0, codec: '', lang: '' };
+        var t = { number: 0, type: 0, codec: '', lang: '', priv: '' };
         walk(view, off, end, function (id, o, e) {
             switch (id) {
                 case ID_TRACKNUMBER: t.number = readUint(view, o, e - o); break;
                 case ID_TRACKTYPE:   t.type   = readUint(view, o, e - o); break;
                 case ID_CODECID:     t.codec  = readAscii(view, o, e - o); break;
                 case ID_LANGUAGE:    t.lang   = readAscii(view, o, e - o); break;
+                /* For S_TEXT/ASS this is the whole script header, styles
+                 * included — the only place an MKV keeps [V4+ Styles]. */
+                case ID_CODECPRIVATE: t.priv = readUtf8(view, o, e - o); break;
             }
         });
         return t;
@@ -225,10 +229,16 @@ var MkvSubs = (function () {
         var toMs = tcScaleNs / 1000000;
         var byTrack = {};
         for (var tn in subTracks) {
+            var codec = subTracks[tn].codec;
+            var isAss = codec.indexOf('ASS') >= 0 || codec.indexOf('SSA') >= 0;
             byTrack[tn] = {
                 id:    subTracks[tn].number,
                 lang:  subTracks[tn].lang || '',
-                codec: subTracks[tn].codec,
+                codec: codec,
+                /* Style table parsed once per track, not per cue. */
+                assFile: (isAss && typeof AssStyle !== 'undefined')
+                    ? AssStyle.forFile(subTracks[tn].priv || '')
+                    : null,
                 cues:  []
             };
         }
@@ -244,14 +254,25 @@ var MkvSubs = (function () {
 
                 var text = readUtf8(view, b.dataOff, b.dataLen).trim();
                 if (!text) continue;
+                var runs = null;
                 if (t.codec.indexOf('ASS') >= 0 || t.codec.indexOf('SSA') >= 0) {
-                    text = cleanAssLine(text);
+                    if (t.assFile) {
+                        /* Inline {\c&H..&} overrides plus the CodecPrivate
+                         * [V4+ Styles] defaults become paintable runs. */
+                        var split = splitAssLine(text);
+                        runs = t.assFile.runs(split.text, split.fields[2] || '');
+                        text = AssStyle.plainText(runs);
+                        if (AssStyle.isPlain(runs)) runs = null;
+                    } else {
+                        text = cleanAssLine(text);
+                    }
                 }
                 if (!text) continue;
                 t.cues.push({
                     start: startMs / 1000,
                     end:   (startMs + durMs) / 1000,
-                    text:  text
+                    text:  text,
+                    runs:  runs
                 });
             }
         }
@@ -267,16 +288,22 @@ var MkvSubs = (function () {
 
     /* ASS dialog line layout:
      *   ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text
-     * Keep only the last field (after the 8th comma) and strip override
-     * tags + linebreak escapes. */
-    function cleanAssLine(s) {
-        var commas = 0;
+     * Returns the 8 leading fields (Style is fields[2], needed to look the
+     * cue's colour up in [V4+ Styles]) plus the Text remainder, which may
+     * itself contain commas. */
+    function splitAssLine(s) {
+        var fields = [];
         var idx = 0;
-        for (var i = 0; i < s.length && commas < 8; i++) {
-            if (s.charAt(i) === ',') { commas++; idx = i + 1; }
+        for (var i = 0; i < s.length && fields.length < 8; i++) {
+            if (s.charAt(i) === ',') { fields.push(s.substring(idx, i)); idx = i + 1; }
         }
-        var text = s.substring(idx);
-        return text
+        return { fields: fields, text: s.substring(idx) };
+    }
+
+    /* Fallback for when ass-style.js isn't loaded (Node tests requiring this
+     * module directly): flatten to plain text exactly as before. */
+    function cleanAssLine(s) {
+        return splitAssLine(s).text
             .replace(/\{[^}]*\}/g, '')
             .replace(/\\N/g, '\n')
             .replace(/\\n/g, '\n')
