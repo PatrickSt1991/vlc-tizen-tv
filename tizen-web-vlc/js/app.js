@@ -309,6 +309,7 @@
         UI.showView('view-home');
         updateRepeatButton();        // reflect saved repeat preference on OSD
         updateShuffleButton();       // reflect saved shuffle preference on OSD
+        updateAspectButton();        // reflect saved aspect/zoom mode on OSD
         SubtitleStyle.apply();       // push saved subtitle appearance onto the overlay
     }
 
@@ -340,6 +341,7 @@
             case 'toggle-repeat':      toggleRepeat(); break;
             case 'toggle-shuffle':     toggleShuffle(); break;
             case 'open-speed-picker':  openSpeedPicker(); break;
+            case 'open-aspect-picker': openAspectPicker(); break;
             case 'open-track-menu':    openTrackMenu(); break;
             case 'close-track-menu':   closeTrackMenu(); break;
             case 'setting-audio-lang':    openLangPicker('audioLang',    'Preferred audio language', LanguageList.forAudio());    break;
@@ -347,6 +349,7 @@
             case 'setting-repeat-mode':   openRepeatPicker(); break;
             case 'setting-auto-play':     openAutoPlayPicker(); break;
             case 'setting-shuffle':       openShufflePicker(); break;
+            case 'setting-aspect-mode':   openAspectPicker(); break;
             case 'setting-subtitle-size':     openSubtitlePicker('subtitleSize',     'Subtitle size',       SubtitleStyle.forSize());     break;
             case 'setting-subtitle-font':     openSubtitlePicker('subtitleFont',     'Subtitle font',       SubtitleStyle.forFont());     break;
             case 'setting-subtitle-position': openSubtitlePicker('subtitlePosition', 'Subtitle position',   SubtitleStyle.forPosition()); break;
@@ -1110,12 +1113,14 @@
         document.getElementById('setting-repeat-mode-value').textContent   = (Settings.get('repeatMode') === 'one') ? 'Repeat one' : 'Off';
         document.getElementById('setting-auto-play-value').textContent     = Settings.get('autoPlay') ? 'On' : 'Off';
         document.getElementById('setting-shuffle-value').textContent       = Settings.get('shuffle')  ? 'On' : 'Off';
+        document.getElementById('setting-aspect-mode-value').textContent   = AspectRatio.nameFor(Settings.get('aspectMode'));
         document.getElementById('setting-subtitle-size-value').textContent     = SubtitleStyle.nameForSize(Settings.get('subtitleSize'));
         document.getElementById('setting-subtitle-font-value').textContent     = SubtitleStyle.nameForFont(Settings.get('subtitleFont'));
         document.getElementById('setting-subtitle-position-value').textContent = SubtitleStyle.nameForPosition(Settings.get('subtitlePosition'));
         document.getElementById('setting-subtitle-bg-value').textContent       = SubtitleStyle.nameForBg(Settings.get('subtitleBg'));
-        // Mirror repeat state to the OSD button if visible
+        // Mirror repeat + aspect state to the OSD buttons if visible
         updateRepeatButton();
+        updateAspectButton();
     }
     function renderTvInfo() {
         var box  = document.getElementById('tvinfo');
@@ -1268,6 +1273,30 @@
         if (Player.isSpeedMuted && Player.isSpeedMuted()) label += ' 🔇';
         btn.textContent = label;
     }
+    /* Video aspect / zoom (user request: "remove the black bars").  Unlike
+     * playback speed this IS persisted — someone who wants a filled screen
+     * wants it for every file, not just the one that's open.  Applying it
+     * mid-playback is safe on both backends, so the OSD button and the
+     * settings row share this one picker. */
+    function openAspectPicker() {
+        var cur = Settings.get('aspectMode');
+        openPicker('Video aspect ratio', AspectRatio.forList(), cur, function (val) {
+            Settings.set('aspectMode', val);
+            Player.applyAspect();
+            updateAspectButton();
+            refreshSettingsValues();
+            UI.toast('Aspect: ' + AspectRatio.nameFor(val));
+        });
+    }
+    function updateAspectButton() {
+        var btn = document.getElementById('btn-aspect');
+        if (!btn) return;
+        var mode = Settings.get('aspectMode');
+        btn.textContent = AspectRatio.shortFor(mode);
+        // Highlight whenever the picture is NOT in the default fit mode, so
+        // a cropped/stretched picture is never a mystery.
+        btn.classList.toggle('aspect-on', mode !== 'fit');
+    }
     function openAutoPlayPicker() {
         pickerSetting = 'autoPlay';
         var cur = Settings.get('autoPlay') ? 'on' : 'off';
@@ -1336,11 +1365,24 @@
     }
 
     /* ── Track menu ───────────────────────────────────────────────── */
+    /* "Audio" / "Subtitle (23)" — the count is what tells a user with a
+     * 20-track rip that the list they're looking at is complete and simply
+     * scrolls, rather than truncated. */
+    function setTrackSectionTitle(id, label, count) {
+        var h = document.getElementById(id);
+        if (h) h.textContent = count > 1 ? (label + ' (' + count + ')') : label;
+    }
     function openTrackMenu() {
         var t = Player.getTracks();
         var aUL = document.getElementById('audio-tracks');
         var sUL = document.getElementById('subtitle-tracks');
         aUL.innerHTML = ''; sUL.innerHTML = '';
+        setTrackSectionTitle('audio-tracks-title', 'Audio', t.audio.length);
+        // Count only real, selectable tracks: not the synthetic "Off" row and
+        // not the "+N can't be drawn" note.
+        var subCount = 0;
+        t.subtitle.forEach(function (tr) { if (!tr.off && !tr.muted) subCount++; });
+        setTrackSectionTitle('subtitle-tracks-title', 'Subtitle', subCount);
 
         if (!t.audio.length) {
             aUL.innerHTML = '<li class="muted">Only one audio track</li>';
@@ -1363,6 +1405,10 @@
             var li = document.createElement('li');
             li.textContent = tr.name;
             if (tr.active) li.classList.add('active');
+            // Informational rows (e.g. "+3 embedded tracks this TV can't
+            // draw") are shown but not selectable — .muted keeps them out of
+            // the focus order too.
+            if (tr.muted) { li.classList.add('muted'); sUL.appendChild(li); return; }
             li.addEventListener('click', function () {
                 Player.setSubtitleTrack(tr.off ? -1 : tr.index);
                 UI.toast('Subtitle: ' + tr.name);
@@ -1559,12 +1605,10 @@
         var pref = (Settings.get('audioLang') || '').toLowerCase();
         function langMatches(t) {
             if (!pref) return false;
-            var l = (t.lang || '').toLowerCase();
-            var nm = (t.name || '').toLowerCase();
-            return l === pref ||
-                   (l && pref.length === 2 && l.indexOf(pref) === 0) ||
-                   (l && l.length === 2 && pref.indexOf(l) === 0) ||
-                   nm.indexOf(pref) >= 0;
+            // Shared with the subtitle picker: matches the language tag, the
+            // ISO 639-2 spelling ('ger', 'vie'), the English name and the
+            // endonym — see LanguageList.matchScore in settings.js.
+            return LanguageList.matchScore(pref, t.lang, t.name) > 0;
         }
         function firstSupported(list) {
             for (var i = 0; i < list.length; i++) if (!list[i].unsupported) return list[i];
@@ -1633,16 +1677,9 @@
             for (var j = 0; j < tracks.subtitle.length; j++) {
                 var st = tracks.subtitle[j];
                 if (st.off) continue;
-                var sn   = (st.name || '').toLowerCase();
-                var lang = (st.lang || '').toLowerCase();
 
-                var sc = 0;
-                if      (lang === wantSub)                                                sc = 100;
-                else if (lang && wantSub.length === 2 && lang.indexOf(wantSub) === 0)     sc = 90;
-                else if (lang && lang.length    === 2 && wantSub.indexOf(lang)    === 0)  sc = 90;
-                else if (sn.indexOf('[' + wantSub + ']') >= 0)                            sc = 80;
-                else if (sn.indexOf(wantSub) >= 0)                                        sc = 50;
-                else continue;
+                var sc = LanguageList.matchScore(wantSub, st.lang, st.name);
+                if (!sc) continue;
 
                 // External subs are reliable on this firmware; embedded ones
                 // often aren't.  Bump externals so they win ties.

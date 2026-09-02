@@ -22,6 +22,9 @@ var Settings = (function () {
         subtitleFont:     'sans',      // 'sans' | 'serif' | 'mono'
         subtitlePosition: 'bottom',    // 'bottom' | 'middle' | 'top'
         subtitleBg:       'none',      // 'none' | 'box'  (translucent box behind text)
+        // ── Video geometry ────────────────────────────────────────────────
+        // How the picture is fitted to the screen: see AspectRatio below.
+        aspectMode:       'fit',       // 'fit' | 'fill' | 'stretch' | 'zoom110' | 'zoom125'
         // The TV's pairing code (url-drop.js mints it once and persists it
         // here).  It HAS to be listed: load() rebuilds the cache from this
         // object, so a key that isn't here is silently dropped on the next
@@ -127,37 +130,109 @@ var TvInfo = (function () {
 
 
 /* Curated language list — common languages for media subtitles + audio.
- * '' = auto (no preference), 'off' is added only to the subtitle picker. */
+ * '' = auto (no preference), 'off' is added only to the subtitle picker.
+ *
+ * `alt` carries the spellings a real track label uses for that language:
+ * the ISO 639-2 code(s) a muxer writes into the language tag ('vie', 'ger',
+ * 'chi'), the English name, and the endonym.  matchScore() below works off
+ * those, so "Vietnamese (SDH)" or "[vie]" match a 'vi' preference and a
+ * bare two-letter code can be required to stand as its own word — without
+ * the alias list a 'vi' preference happily matched "Movie". */
 var LanguageList = (function () {
     var langs = [
-        { code: '',   name: 'Auto (file default)' },
-        { code: 'en', name: 'English' },
-        { code: 'nl', name: 'Nederlands' },
-        { code: 'de', name: 'Deutsch' },
-        { code: 'fr', name: 'Français' },
-        { code: 'es', name: 'Español' },
-        { code: 'it', name: 'Italiano' },
-        { code: 'pt', name: 'Português' },
-        { code: 'ru', name: 'Русский' },
-        { code: 'ja', name: '日本語' },
-        { code: 'ko', name: '한국어' },
-        { code: 'zh', name: '中文' },
-        { code: 'ar', name: 'العربية' },
-        { code: 'tr', name: 'Türkçe' },
-        { code: 'pl', name: 'Polski' },
-        { code: 'sv', name: 'Svenska' },
-        { code: 'no', name: 'Norsk' },
-        { code: 'da', name: 'Dansk' },
-        { code: 'fi', name: 'Suomi' }
+        { code: '',   name: 'Auto (file default)', alt: [] },
+        { code: 'en', name: 'English',    alt: ['eng', 'english'] },
+        { code: 'nl', name: 'Nederlands', alt: ['dut', 'nld', 'dutch', 'nederlands'] },
+        { code: 'de', name: 'Deutsch',    alt: ['ger', 'deu', 'german', 'deutsch'] },
+        { code: 'fr', name: 'Français',   alt: ['fre', 'fra', 'french', 'français', 'francais'] },
+        { code: 'es', name: 'Español',    alt: ['spa', 'spanish', 'español', 'espanol', 'castellano'] },
+        { code: 'it', name: 'Italiano',   alt: ['ita', 'italian', 'italiano'] },
+        { code: 'pt', name: 'Português',  alt: ['por', 'portuguese', 'português', 'portugues', 'brazilian'] },
+        { code: 'ru', name: 'Русский',    alt: ['rus', 'russian', 'русский'] },
+        { code: 'ja', name: '日本語',      alt: ['jpn', 'japanese', '日本語'] },
+        { code: 'ko', name: '한국어',      alt: ['kor', 'korean', '한국어'] },
+        { code: 'zh', name: '中文',        alt: ['chi', 'zho', 'chinese', 'mandarin', 'cantonese', '中文'] },
+        { code: 'vi', name: 'Tiếng Việt', alt: ['vie', 'vietnamese', 'tiếng việt', 'tieng viet'] },
+        { code: 'ar', name: 'العربية',   alt: ['ara', 'arabic', 'العربية'] },
+        { code: 'tr', name: 'Türkçe',     alt: ['tur', 'turkish', 'türkçe', 'turkce'] },
+        { code: 'pl', name: 'Polski',     alt: ['pol', 'polish', 'polski'] },
+        { code: 'sv', name: 'Svenska',    alt: ['swe', 'swedish', 'svenska'] },
+        { code: 'no', name: 'Norsk',      alt: ['nor', 'nob', 'norwegian', 'norsk'] },
+        { code: 'da', name: 'Dansk',      alt: ['dan', 'danish', 'dansk'] },
+        { code: 'fi', name: 'Suomi',      alt: ['fin', 'finnish', 'suomi'] }
     ];
+
+    function entryFor(code) {
+        for (var i = 0; i < langs.length; i++) if (langs[i].code === code) return langs[i];
+        return null;
+    }
+
+    /* Every spelling that identifies `code`, lower-cased: the code itself,
+     * its ISO 639-2 forms, the English name and the endonym. */
+    function tagsFor(code) {
+        var c = String(code || '').toLowerCase();
+        var e = entryFor(c);
+        var out = [c];
+        if (e) {
+            for (var i = 0; i < e.alt.length; i++) out.push(e.alt[i]);
+            var n = e.name.toLowerCase();
+            if (out.indexOf(n) < 0) out.push(n);
+        }
+        return out;
+    }
+
+    function esc(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    /* Whole-"word" test that also works for names with no spaces — track
+     * labels are routinely filename-ish ("Show.S01E02.vi.srt"), so anything
+     * that isn't a latin letter or digit counts as a separator. */
+    function hasWord(hay, word) {
+        return new RegExp('(^|[^a-z0-9])' + esc(word) + '($|[^a-z0-9])', 'i').test(hay);
+    }
+
+    /* How well a track matches a language preference: 0 = no match, 100 =
+     * the track's own language tag says so.  Shared by the audio picker and
+     * the subtitle picker in app.js so both honour the same spellings. */
+    function matchScore(pref, lang, name) {
+        var want = String(pref || '').toLowerCase();
+        if (!want || want === 'off') return 0;
+        var tags = tagsFor(want);
+        var nm   = String(name || '').toLowerCase();
+
+        // 1. The container's own language tag ('vie', 'vi', 'vi-VN').
+        var base = String(lang || '').toLowerCase().split(/[-_]/)[0];
+        if (base) {
+            if (tags.indexOf(base) >= 0) return 100;
+            if (base.length >= 2 &&
+                (base.indexOf(want) === 0 || want.indexOf(base) === 0)) return 90;
+        }
+        if (!nm) return 0;
+
+        // 2. A code in brackets, the muxer convention: "Subtitle [vie]".
+        for (var i = 0; i < tags.length; i++)
+            if (nm.indexOf('[' + tags[i] + ']') >= 0 ||
+                nm.indexOf('(' + tags[i] + ')') >= 0) return 80;
+
+        // 3. A spelled-out name anywhere in the label: "Vietnamese SDH".
+        //    Two-letter latin tags are held back for step 4 (too collision-
+        //    prone), but a short non-ascii endonym like "中文" is unambiguous.
+        for (var j = 0; j < tags.length; j++)
+            if ((tags[j].length >= 3 || /[^\x00-\x7f]/.test(tags[j])) &&
+                hasWord(nm, tags[j])) return 60;
+
+        // 4. The bare two-letter code, but only as its own word — a loose
+        //    substring here is what made 'vi' match "Movie".
+        if (want.length === 2 && hasWord(nm, want)) return 50;
+        return 0;
+    }
+
     return {
         forAudio:    function () { return langs; },
         forSubtitle: function () { return [{ code: 'off', name: 'Off (no subtitles)' }].concat(langs); },
+        matchScore:  matchScore,
         nameFor:     function (code) {
             if (code === 'off') return 'Off';
-            for (var i = 0; i < langs.length; i++)
-                if (langs[i].code === code) return langs[i].name;
-            return code || 'Auto';
+            var e = entryFor(code);
+            return e ? e.name : (code || 'Auto');
         }
     };
 })();
@@ -245,3 +320,75 @@ var SubtitleStyle = (function () {
         apply:       apply
     };
 })();
+
+
+/* Video aspect / zoom modes — how the picture is fitted to the screen.
+ *
+ * Two different "black bars" exist and they need different fixes:
+ *
+ *   1. The file really is wider than the screen (2.39:1 in a 2.39:1 frame).
+ *      The player letterboxes it, and 'fill' — AVPlay's CROPPED_FULL, CSS
+ *      object-fit:cover — scales the picture until it covers the screen and
+ *      crops the sides instead.  Aspect is preserved.
+ *   2. The bars are encoded INTO the frames (a 2.39:1 film muxed as 16:9).
+ *      Nothing the display method does can help there: the frame already
+ *      matches the screen.  The only fix is to zoom past the frame edge,
+ *      which 'zoom110' / 'zoom125' do by handing AVPlay a display rect
+ *      larger than the screen (CSS transform:scale on the HTML5 backend).
+ *
+ * 'stretch' is the blunt instrument — fills the screen by distorting the
+ * picture.  Some users prefer it, so it stays on the list, labelled.
+ *
+ * `av` values are Samsung AVPlay display methods; unsupported ones throw on
+ * older firmware, and player.js falls back to LETTER_BOX when they do. */
+var AspectRatio = (function () {
+    var MODES = [
+        { code: 'fit',     name: 'Fit screen (keep black bars)',  short: 'Fit',
+          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1 },
+        { code: 'fill',    name: 'Fill screen (crop the sides)',  short: 'Fill',
+          av: 'PLAYER_DISPLAY_MODE_CROPPED_FULL', fit: 'cover',   zoom: 1 },
+        { code: 'zoom110', name: 'Zoom 110% (crop baked-in bars)', short: '110%',
+          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1.10 },
+        { code: 'zoom125', name: 'Zoom 125% (crop baked-in bars)', short: '125%',
+          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1.25 },
+        // 'Wide' is the label TVs traditionally put on a stretched 16:9
+        // picture, and unlike 'Stretch' it fits inside the round OSD button.
+        { code: 'stretch', name: 'Stretch (fills, distorts shape)', short: 'Wide',
+          av: 'PLAYER_DISPLAY_MODE_FULL_SCREEN',  fit: 'fill',    zoom: 1 }
+    ];
+
+    function find(code) {
+        for (var i = 0; i < MODES.length; i++) if (MODES[i].code === code) return MODES[i];
+        return MODES[0];
+    }
+    /* The mode currently in force, resolved from Settings. */
+    function current() {
+        if (typeof Settings === 'undefined') return MODES[0];
+        return find(Settings.get('aspectMode'));
+    }
+    /* Next mode in the list — the OSD button cycles rather than opening a
+     * picker when the user just wants to flick through them. */
+    function next(code) {
+        for (var i = 0; i < MODES.length; i++)
+            if (MODES[i].code === code) return MODES[(i + 1) % MODES.length].code;
+        return MODES[0].code;
+    }
+
+    return {
+        forList: function () { return MODES; },
+        find:    find,
+        current: current,
+        next:    next,
+        nameFor:  function (c) { return find(c).name; },
+        shortFor: function (c) { return find(c).short; }
+    };
+})();
+
+// Ignored by the Tizen/browser build; lets Node tests require these helpers.
+if (typeof module !== 'undefined' && module.exports)
+    module.exports = {
+        Settings:      Settings,
+        LanguageList:  LanguageList,
+        SubtitleStyle: SubtitleStyle,
+        AspectRatio:   AspectRatio
+    };

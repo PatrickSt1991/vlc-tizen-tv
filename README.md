@@ -29,6 +29,9 @@ with VLC-inspired UI and TV remote-friendly navigation.
   embedded MP4/MKV text tracks, painted by the app (AVPlay can't render text
   subs on this firmware), with **customisable size, font, position and
   background** under Settings → Subtitle appearance
+- **Aspect ratio / zoom** — fit, fill (crop the sides), 110% / 125% zoom for
+  bars burned into the picture, or stretch; from the OSD button or
+  Settings → Video aspect ratio
 - **No native code** — pure HTML/CSS/JS so it runs on any Tizen TV with a
   Public-tier developer cert. No partner-cert or platform-side requirements.
 

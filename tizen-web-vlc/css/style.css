@@ -588,9 +588,30 @@ button:focus { outline: none; }
     padding: 32px;
     min-width: 480px;
     max-width: 600px;
+    /* Grows upward from bottom:240px, so cap it well short of the top of
+     * the screen.  Rips with 20+ subtitle tracks used to push the first
+     * entries off-screen where the D-pad could reach them but nothing was
+     * visible; the list now scrolls inside .track-menu-body instead. */
+    max-height: calc(100vh - 320px);
+    display: flex;
+    flex-direction: column;
     box-shadow: var(--shadow);
     pointer-events: auto;
     text-align: left;
+}
+.track-menu-body {
+    flex: 1 1 auto;
+    min-height: 0;              /* required for a flex child to actually scroll */
+    overflow-y: auto;
+    /* Room for the focus ring on the right-hand edge of a focused row. */
+    padding-right: 6px;
+}
+/* The scrollbar is decoration on a TV — nobody drags it — but a visible
+ * track is the only cue that there's more list below. */
+.track-menu-body::-webkit-scrollbar { width: 8px; }
+.track-menu-body::-webkit-scrollbar-thumb {
+    background: var(--bg-3);
+    border-radius: 4px;
 }
 .track-menu h2 {
     margin: 0 0 20px;
@@ -637,9 +658,14 @@ button:focus { outline: none; }
     margin: 0 4px;
 }
 
-/* ── Repeat / shuffle buttons (active state highlight) ───────────── */
+/* Word/percentage labels ("Fit", "125%") in the round OSD buttons need a
+ * smaller type size than the glyph controls to stay inside the circle. */
+.ctrl.ctrl-text { font-size: 18px; }
+
+/* ── Repeat / shuffle / aspect buttons (active state highlight) ──── */
 .ctrl.repeat-on,
-.ctrl.shuffle-on {
+.ctrl.shuffle-on,
+.ctrl.aspect-on {
     color: var(--accent);
     background: var(--accent-soft);
 }

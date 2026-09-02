@@ -156,7 +156,8 @@
             <button class="ctrl" data-action="forward">⏩</button>
             <button class="ctrl" data-action="next" id="btn-next" title="Next">⏭</button>
             <button class="ctrl" data-action="open-track-menu">CC</button>
-            <button class="ctrl" data-action="open-speed-picker" id="btn-speed" title="Playback speed">1×</button>
+            <button class="ctrl ctrl-text" data-action="open-speed-picker" id="btn-speed" title="Playback speed">1×</button>
+            <button class="ctrl ctrl-text" data-action="open-aspect-picker" id="btn-aspect" title="Aspect ratio / zoom">Fit</button>
             <button class="ctrl" data-action="toggle-repeat" id="btn-repeat" title="Repeat">↻</button>
             <button class="ctrl" data-action="toggle-shuffle" id="btn-shuffle" title="Shuffle">🔀</button>
             <span class="ctrl-sep" aria-hidden="true"></span>
@@ -167,13 +168,18 @@
     <!-- Track selection overlay -->
     <div class="track-menu hidden" id="track-menu">
         <h2>Tracks</h2>
-        <div class="track-section">
-            <h3>Audio</h3>
-            <ul id="audio-tracks"></ul>
-        </div>
-        <div class="track-section">
-            <h3>Subtitle</h3>
-            <ul id="subtitle-tracks"></ul>
+        <!-- The lists scroll inside this box: a Netflix-style rip can carry
+             20+ subtitle tracks, and an unbounded menu grew straight off the
+             top of the screen with the extra entries unreachable. -->
+        <div class="track-menu-body" id="track-menu-body">
+            <div class="track-section">
+                <h3 id="audio-tracks-title">Audio</h3>
+                <ul id="audio-tracks"></ul>
+            </div>
+            <div class="track-section">
+                <h3 id="subtitle-tracks-title">Subtitle</h3>
+                <ul id="subtitle-tracks"></ul>
+            </div>
         </div>
         <button class="btn ghost" data-action="close-track-menu" data-focus>Close</button>
     </div>
@@ -215,6 +221,10 @@
             <button class="settings-row" data-action="setting-shuffle">
                 <div class="settings-label">Shuffle playlist</div>
                 <div class="settings-value" id="setting-shuffle-value">Off</div>
+            </button>
+            <button class="settings-row" data-action="setting-aspect-mode">
+                <div class="settings-label">Video aspect ratio</div>
+                <div class="settings-value" id="setting-aspect-mode-value">Fit screen (keep black bars)</div>
             </button>
         </div>
 
