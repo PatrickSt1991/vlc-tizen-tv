@@ -83,6 +83,43 @@ test('the zoom modes scale past the frame edge', function () {
     assert.ok(AspectRatio.find('zoom125').zoom > AspectRatio.find('zoom110').zoom);
 });
 
+test('the crop modes derive their zoom from the frame they are given', function () {
+    var SIXTEEN_NINE = 3840 / 2160;
+
+    // The case that prompted this: 2.39:1 content letterboxed into a 4K 16:9
+    // frame.  Measured on the file, the bars are 275 px top and 276 bottom of
+    // 2160, leaving 1609 px of picture — so 2160/1609 = 1.342x clears them.
+    var z = AspectRatio.zoomFor('crop239', SIXTEEN_NINE);
+    assert.ok(Math.abs(z - 2160 / 1609) < 0.01,
+        'expected ~1.34x to crop 2.39:1 out of 16:9, got ' + z);
+    // Neither fixed step lands there: 125% leaves a bar, and nothing offered
+    // 134% before.
+    assert.ok(z > AspectRatio.find('zoom125').zoom);
+
+    // 2:1 content in the same frame needs much less.
+    assert.ok(Math.abs(AspectRatio.zoomFor('crop20', SIXTEEN_NINE) - 1.125) < 0.001);
+
+    // A frame already that wide has no bars to crop, so it is left alone.
+    assert.strictEqual(AspectRatio.zoomFor('crop239', 2.39), 1);
+    assert.strictEqual(AspectRatio.zoomFor('crop20', 2.39), 1);
+    assert.strictEqual(AspectRatio.zoomFor('crop239', 2.5), 1);
+
+    // Nonsense frame data must not blank the screen.
+    assert.strictEqual(AspectRatio.zoomFor('crop239', 0), 1);
+    assert.strictEqual(AspectRatio.zoomFor('crop239', -1), 1);
+    // An absurdly tall frame is clamped rather than magnified without limit.
+    assert.strictEqual(AspectRatio.zoomFor('crop239', 0.1), 2);
+});
+
+test('zoomFor leaves the fixed and non-zooming modes as they are', function () {
+    assert.strictEqual(AspectRatio.zoomFor('fit', 16 / 9), 1);
+    assert.strictEqual(AspectRatio.zoomFor('fill', 16 / 9), 1);
+    assert.strictEqual(AspectRatio.zoomFor('stretch', 16 / 9), 1);
+    // Fixed steps ignore the frame entirely.
+    assert.strictEqual(AspectRatio.zoomFor('zoom110', 16 / 9), 1.10);
+    assert.strictEqual(AspectRatio.zoomFor('zoom125', 2.39), 1.25);
+});
+
 test('an unknown mode falls back to fit, and next() cycles', function () {
     assert.strictEqual(AspectRatio.find('nonsense').code, 'fit');
     var seen = {}, code = 'fit';

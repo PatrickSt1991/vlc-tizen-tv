@@ -332,9 +332,16 @@ var SubtitleStyle = (function () {
  *      crops the sides instead.  Aspect is preserved.
  *   2. The bars are encoded INTO the frames (a 2.39:1 film muxed as 16:9).
  *      Nothing the display method does can help there: the frame already
- *      matches the screen.  The only fix is to zoom past the frame edge,
- *      which 'zoom110' / 'zoom125' do by handing AVPlay a display rect
+ *      matches the screen, so all three display methods above produce an
+ *      identical picture.  The only fix is to zoom past the frame edge,
+ *      which the zoom and crop modes do by handing AVPlay a display rect
  *      larger than the screen (CSS transform:scale on the HTML5 backend).
+ *
+ * The 'zoom*' modes magnify by a fixed amount.  The 'crop*' modes instead
+ * name the shape the content really is, and player.js works out the zoom
+ * from the frame AVPlay reports — 2.39:1 content inside a 16:9 frame needs
+ * 1.34x, and no fixed step lands on that.  A frame already at or wider than
+ * the target is left alone.
  *
  * 'stretch' is the blunt instrument — fills the screen by distorting the
  * picture.  Some users prefer it, so it stays on the list, labelled.
@@ -342,6 +349,10 @@ var SubtitleStyle = (function () {
  * `av` values are Samsung AVPlay display methods; unsupported ones throw on
  * older firmware, and player.js falls back to LETTER_BOX when they do. */
 var AspectRatio = (function () {
+    /* Magnifying more than this stops being a crop and starts being a
+     * close-up, so no derived zoom goes past it. */
+    var MAX_CROP_ZOOM = 2;
+
     var MODES = [
         { code: 'fit',     name: 'Fit screen (keep black bars)',  short: 'Fit',
           av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1 },
@@ -351,6 +362,13 @@ var AspectRatio = (function () {
           av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1.10 },
         { code: 'zoom125', name: 'Zoom 125% (crop baked-in bars)', short: '125%',
           av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1.25 },
+        // Streaming rips are mostly one of these two shapes letterboxed into
+        // a 16:9 frame, and the zoom each needs is a property of the file,
+        // not a number we can hard-code — hence targetDar.
+        { code: 'crop20',  name: 'Crop to 2:1 (remove baked-in bars)', short: '2:1',
+          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1, targetDar: 2 },
+        { code: 'crop239', name: 'Crop to 2.39:1 (remove baked-in bars)', short: '2.39',
+          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1, targetDar: 2.39 },
         // 'Wide' is the label TVs traditionally put on a stretched 16:9
         // picture, and unlike 'Stretch' it fits inside the round OSD button.
         { code: 'stretch', name: 'Stretch (fills, distorts shape)', short: 'Wide',
@@ -366,6 +384,24 @@ var AspectRatio = (function () {
         if (typeof Settings === 'undefined') return MODES[0];
         return find(Settings.get('aspectMode'));
     }
+    /* How far to magnify to crop `code`'s target shape out of a frame of
+     * `frameDar`.  The fixed 'zoom*' modes ignore the frame and return their
+     * own step; the 'crop*' modes derive it, because the zoom that clears
+     * baked-in bars is a property of the file — 2.39:1 content sits in a
+     * 16:9 frame with 1.34x of bar to lose, but in a 2:1 frame with only
+     * 1.19x.  A frame already at or wider than the target needs none.
+     *
+     * Kept here rather than in player.js so it is testable without a
+     * player; player.js supplies the frame AVPlay reports. */
+    function zoomFor(code, frameDar) {
+        var m = find(code);
+        if (!m.targetDar) return m.zoom || 1;
+        if (!(frameDar > 0)) return 1;
+        var z = m.targetDar / frameDar;
+        if (!(z > 1)) return 1;
+        return (z > MAX_CROP_ZOOM) ? MAX_CROP_ZOOM : z;
+    }
+
     /* Next mode in the list — the OSD button cycles rather than opening a
      * picker when the user just wants to flick through them. */
     function next(code) {
@@ -378,6 +414,7 @@ var AspectRatio = (function () {
         forList: function () { return MODES; },
         find:    find,
         current: current,
+        zoomFor: zoomFor,
         next:    next,
         nameFor:  function (c) { return find(c).name; },
         shortFor: function (c) { return find(c).short; }
