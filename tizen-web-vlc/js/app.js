@@ -1285,8 +1285,24 @@
             Player.applyAspect();
             updateAspectButton();
             refreshSettingsValues();
-            UI.toast('Aspect: ' + AspectRatio.nameFor(val));
+            UI.toast('Aspect: ' + AspectRatio.nameFor(val) + aspectToastNote());
         });
+    }
+
+    /* Fit / Fill / Wide all come out identical on a file whose frame already
+     * matches the panel — the usual case, since most rips are 16:9 on a 16:9
+     * TV.  Saying so beats letting the user cycle every mode looking for the
+     * one that isn't broken. */
+    function aspectToastNote() {
+        if (typeof Player.describeAspect !== 'function') return '';
+        var d;
+        try { d = Player.describeAspect(); } catch (e) { return ''; }
+        if (!d) return '';
+        if (d.noop)
+            return ' — no change: the picture already fills the screen. ' +
+                   'Bars inside the frame need a Crop mode.';
+        if (d.zoom > 1.005) return ' — zoom ' + Math.round(d.zoom * 100) + '%';
+        return '';
     }
     function updateAspectButton() {
         var btn = document.getElementById('btn-aspect');

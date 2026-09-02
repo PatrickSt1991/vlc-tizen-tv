@@ -76,12 +76,86 @@ var Player = (function () {
         return avplay;
     }
 
+    /* Frame size AVPlay reports for the video that's open, which is what
+     * turns a target aspect ratio into a zoom factor.  Falling back to the
+     * panel's own shape makes the crop modes no-ops rather than wrong. */
+    function avFrameAspect() {
+        try {
+            var info = av().getCurrentStreamInfo();
+            for (var i = 0; info && i < info.length; i++) {
+                if (info[i].type !== 'VIDEO') continue;
+                var p = parseAvExtraInfo(info[i].extra_info);
+                if (p.width > 0 && p.height > 0) return p.width / p.height;
+            }
+        } catch (e) {}
+        return screenAspect();
+    }
+    function screenAspect() {
+        var w = window.innerWidth  || screen.width  || 1920;
+        var h = window.innerHeight || screen.height || 1080;
+        return (h > 0) ? w / h : 16 / 9;
+    }
+
     /* The user's aspect/zoom choice, resolved from Settings each time so a
      * change from the OSD or the settings view takes effect on the next
      * apply without the player caching a stale mode. */
     function aspect() {
         if (typeof AspectRatio === 'undefined') return { av: 'PLAYER_DISPLAY_MODE_LETTER_BOX', fit: 'contain', zoom: 1 };
-        return AspectRatio.current();
+        var mode = AspectRatio.current();
+        if (!mode.targetDar) return mode;
+        /* Bars baked into the frames can only be cropped by magnifying past
+         * the frame edge, and how far depends on the file — so the amount
+         * comes from the frame AVPlay reports, not a fixed step. */
+        return {
+            av:        mode.av,
+            fit:       mode.fit,
+            zoom:      AspectRatio.zoomFor(mode.code, avFrameAspect()),
+            targetDar: mode.targetDar
+        };
+    }
+
+    /* What the current choice actually does to this file.  app.js turns it
+     * into the toast so a mode that cannot change anything says so, instead
+     * of looking broken. */
+    function describeAspect() {
+        var mode  = (typeof AspectRatio !== 'undefined') ? AspectRatio.current() : null;
+        var eff   = aspect();
+        var frame = avFrameAspect();
+        var panel = screenAspect();
+        return {
+            code:      mode ? mode.code : 'fit',
+            zoom:      eff.zoom || 1,
+            frameDar:  frame,
+            screenDar: panel,
+            /* LETTER_BOX, CROPPED_FULL and FULL_SCREEN all resolve to the
+             * same picture once the frame matches the panel — there is
+             * nothing left to letterbox, crop or stretch.  Most 16:9 files
+             * on a 16:9 TV land here, which is why those three modes look
+             * dead however often you cycle them. */
+            noop: (!mode || !mode.targetDar) && (eff.zoom || 1) === 1 &&
+                  Math.abs(frame - panel) < 0.01
+        };
+    }
+
+    /* The <object> the video plane is composited into has to track the
+     * display rect.  Samsung's AVPlay guide is explicit about it: "If you
+     * use the setDisplayRect() method to change the media display area size
+     * or position during media playback, the object element style attribute
+     * must also be changed correspondingly."  Leaving it alone is why every
+     * zoom level used to look identical to Fit — style.css pins the element
+     * to the full screen, and the firmware kept clipping the plane to that
+     * box no matter what rect AVPlay was handed. */
+    function avSyncSurface(x, y, w, h) {
+        var el = document.getElementById('player-object');
+        if (!el) return;
+        try {
+            el.style.left   = x + 'px';
+            el.style.top    = y + 'px';
+            el.style.width  = w + 'px';
+            el.style.height = h + 'px';
+            el.style.right  = 'auto';
+            el.style.bottom = 'auto';
+        } catch (e) {}
     }
 
     function avSetDisplayRect() {
@@ -96,18 +170,24 @@ var Player = (function () {
                  * into the video frames — no display method can do it. */
                 var zw = Math.round(w * z), zh = Math.round(h * z);
                 var zx = Math.round((w - zw) / 2), zy = Math.round((h - zh) / 2);
+                avSyncSurface(zx, zy, zw, zh);
                 av().setDisplayRect(zx, zy, zw, zh);
                 if (typeof Debug !== 'undefined')
-                    Debug.player('AV setDisplayRect zoom ' + z + ' → ' + zx + ',' + zy + ' ' + zw + 'x' + zh);
+                    Debug.player('AV setDisplayRect zoom ' + z.toFixed(3) + ' → ' + zx + ',' + zy + ' ' + zw + 'x' + zh);
                 return;
             }
+            avSyncSurface(0, 0, w, h);
             av().setDisplayRect(0, 0, w, h);
             if (typeof Debug !== 'undefined') Debug.player('AV setDisplayRect ' + w + 'x' + h);
         } catch (e) {
             if (typeof Debug !== 'undefined') Debug.warn('AV setDisplayRect: ' + e.message);
             /* Firmware that rejects an off-screen rect: fall back to the
-             * plain full-screen one so we never leave the video unsized. */
-            if (z !== 1) { try { av().setDisplayRect(0, 0, w, h); } catch (e2) {} }
+             * plain full-screen one so we never leave the video unsized, and
+             * put the surface back with it. */
+            if (z !== 1) {
+                avSyncSurface(0, 0, w, h);
+                try { av().setDisplayRect(0, 0, w, h); } catch (e2) {}
+            }
         }
     }
     function avSetDisplayMethod() {
@@ -718,6 +798,84 @@ var Player = (function () {
     }
     var h5OpenWatchdog = null;
     var playerSubtitles = [];   // sibling subtitle files, regardless of backend
+
+    /* Every subtitle track the container itself declares, read straight out
+     * of the MKV header.  This exists because AVPlay's getTotalTrackInfo()
+     * truncates its return array: a file holding 1 video + 1 audio + 40
+     * subtitle tracks comes back with 32 entries, so the last ten subtitle
+     * tracks are never offered.  The header costs ~130 KB to read however
+     * big the movie is, and it is the list the CC menu counts. */
+    var containerSubTracks     = [];
+    var lastContainerListToken = 0;
+
+    /* The SMB proxy and the transcode server both carry the real filename in
+     * a query parameter, so testing the path's extension alone misses them. */
+    function looksLikeMatroska(url) {
+        var u = String(url || '');
+        return /\.(mkv|webm)(\?|#|$)/i.test(u) ||
+               /[?&][^=&]+=[^&]*\.(mkv|webm)(&|$)/i.test(u);
+    }
+
+    function listContainerSubTracks(uri, file) {
+        containerSubTracks = [];
+        var token = ++lastContainerListToken;
+        if (!looksLikeMatroska(uri)) return;
+        if (typeof MkvSubs === 'undefined' || !MkvSubs.listTracks) return;
+
+        MkvSubs.listTracks(file || uri, function (err, tracks) {
+            if (token !== lastContainerListToken) return;   // another file opened
+            if (err) {
+                if (typeof Debug !== 'undefined')
+                    Debug.warn('MKV header track list: ' + (err.message || err));
+                return;
+            }
+            containerSubTracks = tracks.filter(MkvSubs.isSubtitleTrack);
+            if (typeof Debug !== 'undefined')
+                Debug.player('MKV header declares ' + containerSubTracks.length +
+                             ' subtitle track(s)');
+            emit('onsubsupdated');      // re-render the CC menu if it's open
+        });
+    }
+
+    /* Label for a track read out of the MKV header: the muxer's own name
+     * ('SDH', 'Latin America'), the language tag, and whichever flags tell
+     * two same-language tracks apart. */
+    function containerSubLabel(t, beyondAvplay) {
+        var tag  = (t.lang || '').toUpperCase();
+        var bits = [];
+        if (t.name) bits.push(t.name);
+        if (t.hearingImpaired && !/sdh|hearing/i.test(t.name || '')) bits.push('SDH');
+        if (t.forced          && !/forced/i.test(t.name || ''))      bits.push('forced');
+        if (!bits.length && t.lang && typeof LanguageList !== 'undefined') {
+            /* Only worth adding when LanguageList actually knows the code —
+             * otherwise nameFor() hands the code straight back and the row
+             * would read '[CZE] cze'. */
+            var human = LanguageList.nameFor(t.lang.split('-')[0]);
+            if (human && human.toLowerCase() !== t.lang.toLowerCase()) bits.push(human);
+        }
+        var label = ('(embedded) ' + (tag ? '[' + tag + '] ' : '') +
+                     bits.join(' · ')).replace(/\s+$/, '');
+        /* Marks the tracks the TV's own demuxer never listed — if selecting
+         * one does nothing, this is the row that explains why. */
+        if (beyondAvplay) label += ' ⚠';
+        return label;
+    }
+
+    /* Two tracks can carry the same language and no distinguishing metadata —
+     * a muxer that names one 'SDH' and only flags the other hearing-impaired
+     * produces two identical rows.  Fall back to the container's track number
+     * so the menu never offers the same label twice. */
+    function disambiguateLabels(rows, tracks) {
+        var seen = {};
+        var i;
+        for (i = 0; i < rows.length; i++)
+            seen[rows[i].name] = (seen[rows[i].name] || 0) + 1;
+        for (i = 0; i < rows.length; i++) {
+            if (seen[rows[i].name] < 2) continue;
+            var num = tracks[i] && tracks[i].number;
+            if (num) rows[i].name = rows[i].name.replace(/( ⚠)?$/, ' · track ' + num + '$1');
+        }
+    }
     /* Legacy alias — older code paths used h5Subtitles directly */
     var h5Subtitles = playerSubtitles;
     function h5Open(url, opts) {
@@ -976,6 +1134,8 @@ var Player = (function () {
     function open(url, opts) {
         opts = opts || {};
         cancelEmbeddedSubExtraction('opening another file');
+        containerSubTracks = [];        // previous file's header list
+        ++lastContainerListToken;       // and any header read still in flight
         playerSubtitles = (opts.subtitles) ? opts.subtitles.slice() : [];
         h5Subtitles = playerSubtitles;
         stopExternalSubtitle();    // clear any previous file's poller
@@ -1006,6 +1166,10 @@ var Player = (function () {
             // File handle in opts.file.
             var subsSourceUri = opts.sourceUri || url;
             if (isLocalUrl(subsSourceUri)) extractAndAppendEmbeddedSubs(subsSourceUri, opts.file);
+            /* Independent of extraction, and not limited to local files: the
+             * header read works over the SMB proxy too, and it is the only
+             * thing that sees every track in a big multi-language mux. */
+            listContainerSubTracks(subsSourceUri, opts.file);
 
             // For local files routed to AVPlay (currently: .mkv), supply a
             // fallback so we degrade gracefully to HTML5 if AVPlay can't
@@ -1198,7 +1362,8 @@ var Player = (function () {
         if (!obj) {
             // Not JSON — use as-is, and look for a 3-letter ISO code in it
             var m = s.match(/\b([a-z]{2,3})\b/i);
-            return { label: s, lang: m ? m[1].toLowerCase() : '', codec: s, channels: 0 };
+            return { label: s, lang: m ? m[1].toLowerCase() : '', codec: s, channels: 0,
+                     width: 0, height: 0 };
         }
         var lang  = (obj.language || obj.lang || obj.track_lang || '').toString().toLowerCase();
         var codec = (obj.fourCC || obj.codec || '').toString();
@@ -1207,7 +1372,12 @@ var Player = (function () {
         if (codec) parts.push(codec);
         var channels = parseInt(obj.channels, 10) || 0;
         if (channels) parts.push(channels + 'ch');
-        return { label: parts.join(' · ') || s, lang: lang, codec: codec, channels: channels };
+        return {
+            label: parts.join(' · ') || s, lang: lang, codec: codec, channels: channels,
+            // VIDEO entries carry the frame size; the crop modes need it.
+            width:  parseInt(obj.width,  10) || 0,
+            height: parseInt(obj.height, 10) || 0
+        };
     }
 
     // AVPlay sometimes exposes better language tags than the MP4 metadata
@@ -1309,6 +1479,8 @@ var Player = (function () {
                 }
             } catch (e) {}
 
+            /* AVPlay's own TEXT tracks, in the order it reports them. */
+            var avTextTracks = [];
             try {
                 var info = av().getTotalTrackInfo();
                 for (var i = 0; i < info.length; i++) {
@@ -1340,20 +1512,66 @@ var Player = (function () {
                             active: (t.index === activeAudioIdx)
                         });
                     } else if (t.type === 'TEXT' || t.type === 'SUBTITLE') {
-                        nativeTextCount++;
-                        if (!showEmbed) continue;
-                        out.subtitle.push({
-                            index:  'embed:' + t.index,
-                            name:   '(embedded) ' + (parsed.label || ('Subtitle ' + t.index)),
-                            lang:   parsed.lang || '',
-                            type:   'AVPLAY_EMBED',
-                            // Only count as active if it's the currently selected
-                            // TEXT track AND no external sub is overriding it.
-                            active: (!currentExternalSub && t.index === activeTextIdx)
+                        avTextTracks.push({
+                            index: t.index,
+                            label: parsed.label || ('Subtitle ' + t.index),
+                            lang:  parsed.lang || ''
                         });
                     }
                 }
             } catch (e) {}
+
+            nativeTextCount = avTextTracks.length;
+
+            /* What the container declares beats what AVPlay admits to.  When
+             * the MKV header found more subtitle tracks than
+             * getTotalTrackInfo() returned, its array was truncated, so drive
+             * the menu off the header and continue AVPlay's index sequence
+             * over the tail.  The indices are contiguous in every firmware
+             * we've seen, so extrapolating from the reported ones is the only
+             * way to name a track AVPlay never listed. */
+            if (showEmbed && containerSubTracks.length > avTextTracks.length) {
+                var step = (avTextTracks.length >= 2)
+                    ? (avTextTracks[1].index - avTextTracks[0].index) : 1;
+                if (!step) step = 1;
+                var firstIdx = avTextTracks.length ? avTextTracks[0].index : 0;
+
+                if (typeof Debug !== 'undefined')
+                    Debug.player('CC menu: container has ' + containerSubTracks.length +
+                                 ' subtitle track(s), AVPlay listed ' + avTextTracks.length +
+                                 ' — extrapolating indices from ' + firstIdx + ' step ' + step);
+
+                var containerRows = [];
+                for (var mi = 0; mi < containerSubTracks.length; mi++) {
+                    var ct    = containerSubTracks[mi];
+                    var known = avTextTracks[mi];
+                    var cIdx  = known ? known.index : (firstIdx + mi * step);
+                    containerRows.push({
+                        index:  'embed:' + cIdx,
+                        name:   containerSubLabel(ct, !known),
+                        lang:   ct.lang || (known && known.lang) || '',
+                        type:   'AVPLAY_EMBED',
+                        beyondAvplay: !known,
+                        active: (!currentExternalSub && cIdx === activeTextIdx)
+                    });
+                }
+                disambiguateLabels(containerRows, containerSubTracks);
+                for (var ri = 0; ri < containerRows.length; ri++)
+                    out.subtitle.push(containerRows[ri]);
+            } else if (showEmbed) {
+                for (var ni = 0; ni < avTextTracks.length; ni++) {
+                    var nt = avTextTracks[ni];
+                    out.subtitle.push({
+                        index:  'embed:' + nt.index,
+                        name:   '(embedded) ' + nt.label,
+                        lang:   nt.lang,
+                        type:   'AVPLAY_EMBED',
+                        // Only count as active if it's the currently selected
+                        // TEXT track AND no external sub is overriding it.
+                        active: (!currentExternalSub && nt.index === activeTextIdx)
+                    });
+                }
+            }
 
             // External sibling subtitle files — always listed; this is the
             // reliable rendering path on this firmware.  Extracted-from-MP4
@@ -1373,9 +1591,12 @@ var Player = (function () {
 
             /* Account for tracks the extractor couldn't take.  A muted row is
              * not selectable (nothing can render them) but it stops the list
-             * from silently under-reporting what's in the file. */
-            if (hasExtracted && nativeTextCount > extractedCount) {
-                var missing = nativeTextCount - extractedCount;
+             * from silently under-reporting what's in the file.  The
+             * container's own count is the honest one where we have it —
+             * AVPlay's is short whenever its array was truncated. */
+            var declaredTextCount = Math.max(nativeTextCount, containerSubTracks.length);
+            if (hasExtracted && declaredTextCount > extractedCount) {
+                var missing = declaredTextCount - extractedCount;
                 out.subtitle.push({
                     index:  'missing',
                     name:   '+' + missing + ' embedded track' + (missing === 1 ? '' : 's') +
@@ -1578,8 +1799,24 @@ var Player = (function () {
                 ? parseInt(index.slice(6), 10)
                 : index;
             try { av().setSilentSubtitle(false); } catch (e) {}
-            try { av().setSelectTrack('TEXT', embedIdx); }
-            catch (e) { try { av().setSelectTrack('SUBTITLE', embedIdx); } catch (e2) {} }
+            /* Logged either way: for a track past the end of AVPlay's own
+             * list this is the only signal of whether the firmware honours
+             * an index it never advertised. */
+            try {
+                av().setSelectTrack('TEXT', embedIdx);
+                if (typeof Debug !== 'undefined')
+                    Debug.player('embedded sub: setSelectTrack TEXT ' + embedIdx + ' accepted');
+            } catch (e) {
+                try {
+                    av().setSelectTrack('SUBTITLE', embedIdx);
+                    if (typeof Debug !== 'undefined')
+                        Debug.player('embedded sub: setSelectTrack SUBTITLE ' + embedIdx + ' accepted');
+                } catch (e2) {
+                    if (typeof Debug !== 'undefined')
+                        Debug.warn('embedded sub: setSelectTrack ' + embedIdx +
+                                   ' rejected: ' + (e2.message || e2));
+                }
+            }
             return;
         }
         if (backend !== BACKEND_HTML5) return;
@@ -1843,6 +2080,7 @@ var Player = (function () {
         setSubtitleTrack:   setSubtitleTrack,
         setDisplayRect:     setDisplayRect,
         applyAspect:        applyAspect,
+        describeAspect:     describeAspect,
         isBuffering:        isBuffering,
         lastBufferingMs:    lastBufferingMs,
         setSpeed:           setSpeed,

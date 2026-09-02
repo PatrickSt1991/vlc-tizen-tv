@@ -662,6 +662,8 @@ var Mp4Subs = (function () {
         };
     }
 
+    /* Exposed as openReader() so mkv-subs.js can Range-read an MKV header
+     * without duplicating the Tizen FileStream vintage handling below. */
     function openIncrementalReader(file, options, cb) {
         if (file && file.readRange && file.getSize) {
             later(function () { cb(null, file); });
@@ -1279,6 +1281,9 @@ var Mp4Subs = (function () {
     return {
         extract:       extract,
         extractIncremental: extractIncremental,
+        openReader:    function (file, cb) {
+            openIncrementalReader(file, normalizeIncrementalOptions({}), cb);
+        },
         cuesToSrt:     cuesToSrt,
         _extractCueLists: extractCueLists,
         writeSrtToTmp: writeSrtToTmp
