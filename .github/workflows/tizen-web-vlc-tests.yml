@@ -25,5 +25,5 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run MP4 subtitle tests
-        run: node --test tests/tizen-web-vlc/mp4-subs.test.js
+      - name: Run subtitle tests
+        run: node --test tests/tizen-web-vlc/*.test.js
