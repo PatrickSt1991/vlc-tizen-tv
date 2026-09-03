@@ -268,7 +268,7 @@ tizen-web-vlc/
 ├── css/
 │   └── style.css       Dark slate-blue theme, focus management, OSD
 ├── js/
-│   ├── debug.js        Optional UDP/HTTP-style telemetry to a PC for debugging
+│   ├── debug.js        Log lines to the DevTools console, plus optional POSTs to a PC
 │   ├── remote.js       TV remote key registration + dispatch
 │   ├── ui.js           Focus management + view switching + toast
 │   ├── browser.js      USB / Tizen filesystem enumeration

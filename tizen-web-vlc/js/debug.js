@@ -1,10 +1,18 @@
-/* Debug telemetry — fire-and-forget HTTP POSTs to a PC listener.
+/* Debug telemetry — every line goes to the browser console, and optionally
+ * to a PC listener as well.
  *
- * The endpoint is configured at runtime under Settings → Debug logging and
- * persisted in localStorage, so anyone can point it at their own machine
- * instead of editing a hard-coded IP. It ships DISABLED: nothing is sent
- * until you turn it on and enter your listener's IP. (A simple HTTP listener
- * on the chosen port — e.g. the PowerShell one on 9999 — receives each line.)
+ * The console is the one that needs no setup: Apps2Samsung → Installed apps →
+ * Debug puts the app in debug mode and opens chrome://inspect, and inspecting
+ * it from there gives a real DevTools console with these lines in it, live,
+ * filterable, on any machine that can reach the TV.  Nothing to configure,
+ * nothing to keep running, and it works even when the network path to a
+ * listener doesn't.  Lines are tagged [vlctv] so they're one filter away from
+ * whatever else the WebView is saying.
+ *
+ * The HTTP POSTs are still there for capturing a session without DevTools
+ * attached.  That half is configured under Settings → Debug logging,
+ * persisted in localStorage, and ships DISABLED — the console output does
+ * not depend on it.
  */
 
 var Debug = (function () {
@@ -22,6 +30,10 @@ var Debug = (function () {
     }
     var cfg = loadCfg();
 
+    /* Whether the POST half has somewhere to go.  The console half is always
+     * on: it costs nothing when no inspector is attached, and having to go
+     * and enable something before the interesting thing happens again is
+     * exactly what makes a bug hard to catch. */
     function active() { return cfg.enabled && !!cfg.host; }
     function url()    { return 'http://' + cfg.host + ':' + cfg.port + '/'; }
 
@@ -31,10 +43,22 @@ var Debug = (function () {
     }
 
     function send(tag, msg) {
-        if (!active()) return;
         seq++;
         var payload = ts() + ' #' + seq + ' [' + tag + '] ' +
                       (typeof msg === 'string' ? msg : JSON.stringify(msg));
+
+        /* DevTools first, so a line still lands there when the POST path is
+         * off or the listener has gone away.  console.error for the tags that
+         * mean something went wrong, so they keep DevTools' red styling and
+         * its error filter. */
+        try {
+            var out = (tag === 'ERROR' || tag === 'WARN' ||
+                       tag === 'JSERR' || tag === 'JSREJECT')
+                ? console.error : console.log;
+            out.call(console, '[vlctv]' + payload);
+        } catch (e) {}
+
+        if (!active()) return;
         var dest = url();
         try {
             var x = new XMLHttpRequest();
@@ -122,3 +146,6 @@ var Debug = (function () {
         get enabled() { return cfg.enabled; }
     };
 })();
+
+// Ignored by the Tizen/browser build; lets Node tests check what goes where.
+if (typeof module !== 'undefined' && module.exports) module.exports = Debug;
