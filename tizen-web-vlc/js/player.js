@@ -59,9 +59,12 @@ var Player = (function () {
         onbuffering:    null,
         onprogress:     null,
         oncomplete:     null,
-        onsubsupdated:  null    // fired when extracted-from-MP4 subs land in
+        onsubsupdated:  null,   // fired when extracted-from-MP4 subs land in
                                 // playerSubtitles after open() — lets the CC
                                 // menu re-render if it's currently visible
+        onsubnotice:    null    // user-facing subtitle message (a track being
+                                // read out of the container, or one that
+                                // couldn't be) — app.js toasts it
     };
     function setListener(name, fn) { if (name in listeners) listeners[name] = fn; }
     function emit(name) {
@@ -72,13 +75,35 @@ var Player = (function () {
     var avplay = null;
     function av() {
         if (avplay) return avplay;
-        if (typeof webapis !== 'undefined' && webapis.avplay) avplay = webapis.avplay;
+        if (typeof webapis !== 'undefined' && webapis.avplay) {
+            avplay = webapis.avplay;
+            logAvplayApi();
+        }
         return avplay;
     }
 
-    /* Frame size AVPlay reports for the video that's open, which is what
-     * turns a target aspect ratio into a zoom factor.  Falling back to the
-     * panel's own shape makes the crop modes no-ops rather than wrong. */
+    /* One-time inventory of the geometry calls the firmware actually has.
+     * settings.js explains why there are only three aspect modes: AVPlay's
+     * documented surface can position the picture but never crop or magnify
+     * it.  If some set turns out to expose a call that can, this line in the
+     * log is the only place it would show up. */
+    var avplayApiLogged = false;
+    function logAvplayApi() {
+        if (avplayApiLogged || typeof Debug === 'undefined') return;
+        avplayApiLogged = true;
+        var probes = ['setVideoRoi', 'setCropArea', 'setZoom', 'setScaling', 'setPictureSize'];
+        var found  = [];
+        for (var i = 0; i < probes.length; i++) {
+            try { if (typeof avplay[probes[i]] === 'function') found.push(probes[i]); }
+            catch (e) {}
+        }
+        Debug.player('avplay crop/zoom API: ' + (found.join(' ') || 'none (display rect only)'));
+    }
+
+    /* Frame shape AVPlay reports for the video that's open, against the
+     * panel's own — the pair that says whether a display method has anything
+     * left to do.  Falling back to the panel's shape makes the answer "no"
+     * rather than a wrong guess. */
     function avFrameAspect() {
         try {
             var info = av().getCurrentStreamInfo();
@@ -96,98 +121,52 @@ var Player = (function () {
         return (h > 0) ? w / h : 16 / 9;
     }
 
-    /* The user's aspect/zoom choice, resolved from Settings each time so a
-     * change from the OSD or the settings view takes effect on the next
-     * apply without the player caching a stale mode. */
+    /* The user's aspect choice, resolved from Settings each time so a change
+     * from the OSD or the settings view takes effect on the next apply
+     * without the player caching a stale mode. */
     function aspect() {
-        if (typeof AspectRatio === 'undefined') return { av: 'PLAYER_DISPLAY_MODE_LETTER_BOX', fit: 'contain', zoom: 1 };
-        var mode = AspectRatio.current();
-        if (!mode.targetDar) return mode;
-        /* Bars baked into the frames can only be cropped by magnifying past
-         * the frame edge, and how far depends on the file — so the amount
-         * comes from the frame AVPlay reports, not a fixed step. */
-        return {
-            av:        mode.av,
-            fit:       mode.fit,
-            zoom:      AspectRatio.zoomFor(mode.code, avFrameAspect()),
-            targetDar: mode.targetDar
-        };
+        if (typeof AspectRatio === 'undefined')
+            return { av: 'PLAYER_DISPLAY_MODE_LETTER_BOX', fit: 'contain' };
+        return AspectRatio.current();
     }
 
     /* What the current choice actually does to this file.  app.js turns it
-     * into the toast so a mode that cannot change anything says so, instead
+     * into the toast, so a mode that cannot change anything says so instead
      * of looking broken. */
     function describeAspect() {
         var mode  = (typeof AspectRatio !== 'undefined') ? AspectRatio.current() : null;
-        var eff   = aspect();
         var frame = avFrameAspect();
         var panel = screenAspect();
         return {
             code:      mode ? mode.code : 'fit',
-            zoom:      eff.zoom || 1,
             frameDar:  frame,
             screenDar: panel,
             /* LETTER_BOX, CROPPED_FULL and FULL_SCREEN all resolve to the
              * same picture once the frame matches the panel — there is
-             * nothing left to letterbox, crop or stretch.  Most 16:9 files
-             * on a 16:9 TV land here, which is why those three modes look
-             * dead however often you cycle them. */
-            noop: (!mode || !mode.targetDar) && (eff.zoom || 1) === 1 &&
-                  Math.abs(frame - panel) < 0.01
+             * nothing left to letterbox, crop or stretch.  Most rips are
+             * 16:9 on a 16:9 TV and land here, which is why cycling the
+             * modes on one looks like nothing is working: any black bars on
+             * such a file are inside the frames, and settings.js explains
+             * why nothing in AVPlay can crop those. */
+            noop: Math.abs(frame - panel) < 0.01
         };
     }
 
-    /* The <object> the video plane is composited into has to track the
-     * display rect.  Samsung's AVPlay guide is explicit about it: "If you
-     * use the setDisplayRect() method to change the media display area size
-     * or position during media playback, the object element style attribute
-     * must also be changed correspondingly."  Leaving it alone is why every
-     * zoom level used to look identical to Fit — style.css pins the element
-     * to the full screen, and the firmware kept clipping the plane to that
-     * box no matter what rect AVPlay was handed. */
-    function avSyncSurface(x, y, w, h) {
-        var el = document.getElementById('player-object');
-        if (!el) return;
-        try {
-            el.style.left   = x + 'px';
-            el.style.top    = y + 'px';
-            el.style.width  = w + 'px';
-            el.style.height = h + 'px';
-            el.style.right  = 'auto';
-            el.style.bottom = 'auto';
-        } catch (e) {}
-    }
-
+    /* The video plane fills the screen; #player-object's CSS box already
+     * matches it, which is what Samsung's guide asks for ("if you use
+     * setDisplayRect() to change the media display area size or position
+     * during media playback, the object element style attribute must also be
+     * changed correspondingly").  Nothing here ever moves it off that box —
+     * a rect that starts off-screen is what a zoom would need, and AVPlay
+     * rejects those. */
     function avSetDisplayRect() {
         var w = window.innerWidth  || screen.width  || 1920;
         var h = window.innerHeight || screen.height || 1080;
-        var z = aspect().zoom || 1;
         try {
-            if (z !== 1) {
-                /* Zoom past the frame edge: hand AVPlay a rect bigger than
-                 * the screen, centred, so the overflow falls outside the
-                 * panel.  This is the only way to crop bars that are baked
-                 * into the video frames — no display method can do it. */
-                var zw = Math.round(w * z), zh = Math.round(h * z);
-                var zx = Math.round((w - zw) / 2), zy = Math.round((h - zh) / 2);
-                avSyncSurface(zx, zy, zw, zh);
-                av().setDisplayRect(zx, zy, zw, zh);
-                if (typeof Debug !== 'undefined')
-                    Debug.player('AV setDisplayRect zoom ' + z.toFixed(3) + ' → ' + zx + ',' + zy + ' ' + zw + 'x' + zh);
-                return;
-            }
-            avSyncSurface(0, 0, w, h);
             av().setDisplayRect(0, 0, w, h);
             if (typeof Debug !== 'undefined') Debug.player('AV setDisplayRect ' + w + 'x' + h);
         } catch (e) {
             if (typeof Debug !== 'undefined') Debug.warn('AV setDisplayRect: ' + e.message);
-            /* Firmware that rejects an off-screen rect: fall back to the
-             * plain full-screen one so we never leave the video unsized, and
-             * put the surface back with it. */
-            if (z !== 1) {
-                avSyncSurface(0, 0, w, h);
-                try { av().setDisplayRect(0, 0, w, h); } catch (e2) {}
-            }
         }
     }
     function avSetDisplayMethod() {
@@ -204,20 +183,15 @@ var Player = (function () {
         }
     }
 
-    /* HTML5 backend equivalent: object-fit covers cases 1 and 3, a CSS
-     * scale() handles the zoom levels.  body is overflow:hidden, so the
-     * scaled overflow is clipped exactly like the AVPlay rect. */
+    /* HTML5 backend equivalent: object-fit does the same three jobs the
+     * AVPlay display methods do. */
     function h5ApplyAspect() {
         var v = h5el();
         if (!v) return;
-        var mode = aspect();
-        try {
-            v.style.objectFit = mode.fit;
-            v.style.transform = (mode.zoom && mode.zoom !== 1) ? 'scale(' + mode.zoom + ')' : '';
-        } catch (e) {}
+        try { v.style.objectFit = aspect().fit; } catch (e) {}
     }
 
-    /* Push the current aspect/zoom mode onto whichever backend is live. */
+    /* Push the current aspect mode onto whichever backend is live. */
     function applyAspect() {
         if (backend === BACKEND_AVPLAY)     { avSetDisplayRect(); avSetDisplayMethod(); }
         else if (backend === BACKEND_HTML5) { h5ApplyAspect(); }
@@ -837,6 +811,14 @@ var Player = (function () {
         });
     }
 
+    /* Bitmap subs (PGS, VobSub) hold pictures, not text: nothing in this
+     * player can paint them, so a track carrying them is only selectable if
+     * AVPlay itself will render it. */
+    function containerSubExtractable(t) {
+        return (typeof MkvSubs !== 'undefined' && MkvSubs.isTextSubtitleTrack)
+            ? MkvSubs.isTextSubtitleTrack(t) : false;
+    }
+
     /* Label for a track read out of the MKV header: the muxer's own name
      * ('SDH', 'Latin America'), the language tag, and whichever flags tell
      * two same-language tracks apart. */
@@ -855,9 +837,11 @@ var Player = (function () {
         }
         var label = ('(embedded) ' + (tag ? '[' + tag + '] ' : '') +
                      bits.join(' · ')).replace(/\s+$/, '');
-        /* Marks the tracks the TV's own demuxer never listed — if selecting
-         * one does nothing, this is the row that explains why. */
-        if (beyondAvplay) label += ' ⚠';
+        /* Marks a track nothing can reach: AVPlay never listed it, so it
+         * can't select it, and its subs are bitmaps, so we can't extract
+         * them either.  Text tracks past AVPlay's list are fine — they get
+         * read out of the container on demand. */
+        if (beyondAvplay && !containerSubExtractable(t)) label += ' ⚠';
         return label;
     }
 
@@ -876,6 +860,221 @@ var Player = (function () {
             if (num) rows[i].name = rows[i].name.replace(/( ⚠)?$/, ' · track ' + num + '$1');
         }
     }
+    /* ── Tracks AVPlay lists but cannot select ────────────────────────
+     *
+     * getTotalTrackInfo() stops at 32 entries, and setSelectTrack('TEXT', n)
+     * only works for the tracks it returned: hand the firmware an index it
+     * never advertised and the previous track simply keeps rendering, which
+     * is what picking Vietnamese out of the tail of a 40-track file looks
+     * like.  MkvSubs.extractTrack() reads that one track's text out of the
+     * container through the cue index and the existing poller paints it —
+     * the same path a sibling .srt takes, so it is the one path on this
+     * firmware that is known to work.
+     *
+     * Entries made this way are marked _onDemand: they belong to an embedded
+     * row in the CC menu rather than getting a row of their own, and they
+     * must not count as "we extracted this file's subs" — that would hide
+     * the embedded list the rest of the tracks live on. */
+    var subsSource            = null;   // { uri, file } for the file that's open
+    var activeTrackExtraction = null;
+    var activeTrackEntry      = null;
+    var trackExtractToken     = 0;
+
+    function cancelTrackExtraction(reason) {
+        clearTimeout(nativeSubVerifyTimer);
+        ++trackExtractToken;
+        if (activeTrackExtraction && activeTrackExtraction.cancel) {
+            activeTrackExtraction.cancel(reason);
+        }
+        /* Whatever it had got to stays usable, but it must stop claiming to
+         * be still reading — and an entry with nothing in it is just a dead
+         * row in the menu. */
+        if (activeTrackEntry) {
+            if (activeTrackEntry.cues && activeTrackEntry.cues.length) {
+                activeTrackEntry._partial = true;
+                activeTrackEntry.name = trackRowBaseName(activeTrackEntry) +
+                    ' — partial (' + activeTrackEntry.cues.length + ' cues)';
+            } else {
+                dropOnDemandEntry(activeTrackEntry);
+            }
+        }
+        activeTrackExtraction = null;
+        activeTrackEntry      = null;
+    }
+
+    function onDemandEntryFor(trackNumber) {
+        if (!(trackNumber > 0)) return null;
+        for (var i = 0; i < playerSubtitles.length; i++) {
+            if (playerSubtitles[i] && playerSubtitles[i]._mkvTrack === trackNumber)
+                return playerSubtitles[i];
+        }
+        return null;
+    }
+
+    function dropOnDemandEntry(entry) {
+        for (var i = 0; i < playerSubtitles.length; i++) {
+            if (playerSubtitles[i] === entry) { playerSubtitles.splice(i, 1); break; }
+        }
+        h5Subtitles = playerSubtitles;
+    }
+
+    /* Menu-row label without the state suffix this function appends. */
+    function trackRowBaseName(row) {
+        return String((row && row.name) || 'Embedded subtitle')
+            .replace(/ ⚠$/, '')
+            .replace(/ — (extracting.*|partial.*)$/, '');
+    }
+
+    /* Which TEXT track AVPlay says it is rendering right now.  -1 when it
+     * won't say, which is not the same as "none" and must not be read as a
+     * failed selection. */
+    function avActiveTextIndex() {
+        try {
+            var cur = av().getCurrentStreamInfo();
+            for (var i = 0; cur && i < cur.length; i++) {
+                if (cur[i].type === 'TEXT' || cur[i].type === 'SUBTITLE') return cur[i].index;
+            }
+        } catch (e) {}
+        return -1;
+    }
+
+    /* setSelectTrack can return without complaint and still leave the old
+     * track on screen — accepting a call and acting on it are different
+     * things here, and this is the shape the bug takes for a user who picks
+     * a language and watches the previous one carry on.  Give the firmware a
+     * moment, then check what it actually selected and read the track out of
+     * the container ourselves if it didn't move. */
+    var nativeSubVerifyTimer = null;
+    function verifyNativeSubSelection(row, wantIdx) {
+        clearTimeout(nativeSubVerifyTimer);
+        if (!row || !(row.mkvTrack > 0)) return;
+        nativeSubVerifyTimer = setTimeout(function () {
+            // Moved on since: an external sub, or subs off.
+            if (currentExternalSub || !avNativeSubsAllowed) return;
+            var got = avActiveTextIndex();
+            if (got < 0 || got === wantIdx) return;
+            if (typeof Debug !== 'undefined')
+                Debug.warn('embedded sub: asked for TEXT ' + wantIdx + ', firmware still on ' +
+                           got + ' — reading track ' + row.mkvTrack + ' out of the container');
+            var how = extractContainerTrack(row);
+            if (how) emit('onsubsupdated');
+        }, 600);
+    }
+
+    /* Extraction failures the user can do something about (pick another
+     * track, plug the drive in directly) read better than the parser's own
+     * wording, which goes to the log. */
+    function subExtractReason(err) {
+        var m = (err && err.message) || String(err || 'unknown error');
+        if (/no cue index|no block positions|no entries for track/.test(m))
+            return 'the file carries no index for it';
+        if (/only text subtitles/.test(m))
+            return 'its subtitles are images, not text';
+        return m.length > 80 ? m.slice(0, 77) + '…' : m;
+    }
+
+    /* Returns 'cached' when the track was already extracted, 'extracting'
+     * when a read has just started, or null when this file can't supply it. */
+    function extractContainerTrack(row) {
+        var num = row && row.mkvTrack;
+        if (!(num > 0)) return null;
+        if (row.extractable === false) return null;   // bitmap subs: no text to read
+
+        var existing = onDemandEntryFor(num);
+        /* Already read once: nothing to do but point the poller at it. */
+        if (existing && !existing._partial) {
+            avNativeSubsAllowed = false;
+            applyExternalSubtitleLive(existing);
+            return 'cached';
+        }
+        if (typeof MkvSubs === 'undefined' || !MkvSubs.extractTrack || !subsSource) return null;
+
+        var base  = trackRowBaseName(row);
+        var entry;
+        if (existing) {
+            /* Abandoned half-read when another track was picked.  Start it
+             * over — into the same array, which the poller already holds —
+             * rather than leaving the gaps in place. */
+            entry = existing;
+            entry.cues.length = 0;
+            entry.name = base + ' — extracting 0%';
+        } else {
+            entry = {
+                name:            base + ' — extracting 0%',
+                lang:            row.lang || '',
+                ext:             'srt',
+                cues:            [],
+                _extracted:      true,
+                _onDemand:       true,
+                _incremental:    true,
+                _containerLabel: 'MKV',
+                _mkvTrack:       num,
+                _cueCount:       0
+            };
+            playerSubtitles.push(entry);
+            h5Subtitles = playerSubtitles;
+        }
+        entry._partial = false;
+
+        /* Selected before a single cue has arrived: the poller holds this
+         * array and paints whatever lands in it, so the track starts showing
+         * while the rest of the file is still being read. */
+        avNativeSubsAllowed = false;
+        applyExternalSubtitleLive(entry);
+        emit('onsubsupdated');
+        emit('onsubnotice', 'Reading ' + base.replace(/^\(embedded\) /, '') +
+                            ' from the file — subtitles appear as they load');
+
+        cancelTrackExtraction('another track picked');
+        var token    = ++trackExtractToken;
+        var lastEmit = 0;
+        activeTrackEntry = entry;
+
+        activeTrackExtraction = MkvSubs.extractTrack(subsSource.file || subsSource.uri, num, {
+            cues:      entry.cues,
+            startAtMs: currentTime(),      // ms, same as the poller reads
+            onCues: function (have, total) {
+                if (token !== trackExtractToken) return;
+                entry._cueCount = have;
+                entry.name = base + ' — extracting ' +
+                             (total ? Math.round(have * 100 / total) : 0) + '%';
+                /* The CC menu re-renders on this event and takes focus with
+                 * it, so it fires at a pace a user can live with. */
+                var now = Date.now();
+                if (now - lastEmit < 3000) return;
+                lastEmit = now;
+                emit('onsubsupdated');
+            }
+        }, function (err) {
+            if (token !== trackExtractToken) return;
+            activeTrackExtraction = null;
+            activeTrackEntry      = null;
+            entry._cueCount       = entry.cues.length;
+
+            if (err && !entry.cues.length) {
+                /* Nothing to paint: take the entry back out rather than
+                 * leaving a selected track that shows nothing, and put the
+                 * reason on screen. */
+                dropOnDemandEntry(entry);
+                if (currentExternalSub === entry) {
+                    stopExternalSubtitle();
+                    currentExternalSub = null;
+                }
+                emit('onsubsupdated');
+                emit('onsubnotice', 'Can’t read ' + base.replace(/^\(embedded\) /, '') +
+                                    ' from this file — ' + subExtractReason(err));
+                return;
+            }
+            entry._partial = !!err;
+            entry.name = base + (err ? ' — partial (' + entry.cues.length + ' cues)' : '');
+            emit('onsubsupdated');
+            if (typeof Debug !== 'undefined')
+                Debug.player('on-demand sub track ' + num + ': ' + entry.cues.length + ' cues' +
+                             (err ? ' (incomplete: ' + (err.message || err) + ')' : ''));
+        });
+        return 'extracting';
+    }
+
     /* Legacy alias — older code paths used h5Subtitles directly */
     var h5Subtitles = playerSubtitles;
     function h5Open(url, opts) {
@@ -1139,6 +1338,8 @@ var Player = (function () {
         playerSubtitles = (opts.subtitles) ? opts.subtitles.slice() : [];
         h5Subtitles = playerSubtitles;
         stopExternalSubtitle();    // clear any previous file's poller
+        cancelTrackExtraction('new file');
+        subsSource = null;
         avNativeSubsAllowed = false;   // don't paint AVPlay's stray first-cue at file open
         currentSpeed = 1;          // playback speed is per-file; reset every open
         backend = pickBackend(url);
@@ -1165,6 +1366,9 @@ var Player = (function () {
             // container to sniff, while the bytes still come from the Tizen
             // File handle in opts.file.
             var subsSourceUri = opts.sourceUri || url;
+            /* Kept for the whole file: picking a track the TV can't select
+               means going back to these bytes for that one track's text. */
+            subsSource = { uri: subsSourceUri, file: opts.file || null };
             if (isLocalUrl(subsSourceUri)) extractAndAppendEmbeddedSubs(subsSourceUri, opts.file);
             /* Independent of extraction, and not limited to local files: the
              * header read works over the SMB proxy too, and it is the only
@@ -1226,6 +1430,7 @@ var Player = (function () {
     function stop() {
         clearTimeout(h5OpenWatchdog);
         cancelEmbeddedSubExtraction('playback stopped');
+        cancelTrackExtraction('playback stopped');
         stopExternalSubtitle();
         hideSubtitleText();
         currentExternalSub = null;
@@ -1452,7 +1657,11 @@ var Player = (function () {
             // user doesn't see duplicates where only one actually works.
             var extractedCount = 0;
             for (var ei = 0; ei < playerSubtitles.length; ei++) {
-                if (playerSubtitles[ei]._extracted) extractedCount++;
+                /* On-demand tracks belong to an embedded row, not to a row
+                 * of their own — counting them here would suppress the very
+                 * list they were picked from. */
+                if (playerSubtitles[ei]._extracted && !playerSubtitles[ei]._onDemand)
+                    extractedCount++;
             }
             var hasExtracted = extractedCount > 0;
             var showEmbed = !hasExtracted;
@@ -1546,13 +1755,24 @@ var Player = (function () {
                     var ct    = containerSubTracks[mi];
                     var known = avTextTracks[mi];
                     var cIdx  = known ? known.index : (firstIdx + mi * step);
+                    /* A track already read out of the container keeps the
+                     * entry's name — it carries the extraction's progress. */
+                    var got   = onDemandEntryFor(ct.number);
                     containerRows.push({
                         index:  'embed:' + cIdx,
-                        name:   containerSubLabel(ct, !known),
+                        name:   got ? got.name : containerSubLabel(ct, !known),
                         lang:   ct.lang || (known && known.lang) || '',
                         type:   'AVPLAY_EMBED',
+                        /* The container's own track number, which is what
+                         * our extractor addresses tracks by — AVPlay's index
+                         * is no use to it — and whether it holds text at
+                         * all, so a bitmap track fails on the spot instead
+                         * of after a read that could never work. */
+                        mkvTrack:     ct.number,
+                        extractable:  containerSubExtractable(ct),
                         beyondAvplay: !known,
-                        active: (!currentExternalSub && cIdx === activeTextIdx)
+                        active: got ? (currentExternalSub === got)
+                                    : (!currentExternalSub && cIdx === activeTextIdx)
                     });
                 }
                 disambiguateLabels(containerRows, containerSubTracks);
@@ -1560,15 +1780,23 @@ var Player = (function () {
                     out.subtitle.push(containerRows[ri]);
             } else if (showEmbed) {
                 for (var ni = 0; ni < avTextTracks.length; ni++) {
-                    var nt = avTextTracks[ni];
+                    var nt  = avTextTracks[ni];
+                    /* Same ordinal in the container's own list, where we have
+                     * one: it carries the track number our extractor needs
+                     * if the firmware turns the selection down. */
+                    var cnt = containerSubTracks[ni];
+                    var ext = cnt ? onDemandEntryFor(cnt.number) : null;
                     out.subtitle.push({
                         index:  'embed:' + nt.index,
-                        name:   '(embedded) ' + nt.label,
-                        lang:   nt.lang,
+                        name:   ext ? ext.name : ('(embedded) ' + nt.label),
+                        lang:   nt.lang || (cnt && cnt.lang) || '',
                         type:   'AVPLAY_EMBED',
+                        mkvTrack:    cnt ? cnt.number : 0,
+                        extractable: cnt ? containerSubExtractable(cnt) : false,
                         // Only count as active if it's the currently selected
                         // TEXT track AND no external sub is overriding it.
-                        active: (!currentExternalSub && nt.index === activeTextIdx)
+                        active: ext ? (currentExternalSub === ext)
+                                    : (!currentExternalSub && nt.index === activeTextIdx)
                     });
                 }
             }
@@ -1579,6 +1807,7 @@ var Player = (function () {
             // so the user can tell where they came from.
             for (var k = 0; k < playerSubtitles.length; k++) {
                 var s = playerSubtitles[k];
+                if (s._onDemand) continue;      // shown as its embedded row
                 var label = (s.lang ? '[' + s.lang.toUpperCase() + '] ' : '') + s.name;
                 out.subtitle.push({
                     index:  'ext:' + k,
@@ -1765,17 +1994,29 @@ var Player = (function () {
         }
     }
 
-    function setSubtitleTrack(index) {
+    /* `sel` is a whole row from getTracks() where the caller has one — an
+     * embedded row needs its container track number as well as AVPlay's
+     * index, because the two paths that can render it are addressed
+     * differently.  A bare index still works for older callers.
+     *
+     * Returns how the track is being rendered: 'native', 'external',
+     * 'cached', 'extracting', 'off', or null when nothing could take it. */
+    function setSubtitleTrack(sel) {
+        var row   = (sel && typeof sel === 'object') ? sel : null;
+        var index = row ? row.index : sel;
+
         if (backend === BACKEND_AVPLAY) {
             hideSubtitleText();
             stopExternalSubtitle();
 
+            clearTimeout(nativeSubVerifyTimer);
+
             // "Off"
-            if (index === -1 || index === undefined || index === 'off') {
+            if (index === -1 || index === undefined || index === 'off' || (row && row.off)) {
                 try { av().setSilentSubtitle(true); } catch (e) {}
                 avNativeSubsAllowed = false;
                 currentExternalSub = null;   // allow re-selecting the same sub later
-                return;
+                return 'off';
             }
 
             // External subtitle file: render via the JS time-poller so the
@@ -1785,30 +2026,44 @@ var Player = (function () {
             if (typeof index === 'string' && index.indexOf('ext:') === 0) {
                 var k = parseInt(index.slice(4), 10);
                 var sub = playerSubtitles[k];
-                if (!sub) return;
+                if (!sub) return null;
                 avNativeSubsAllowed = false;
                 applyExternalSubtitleLive(sub);
                 if (typeof Debug !== 'undefined')
                     Debug.player('external sub via JS poller (no-seek): ' + sub.name);
-                return;
+                return 'external';
             }
 
-            // Embedded subtitle: "embed:<i>" — delegate to AVPlay's own track API
-            avNativeSubsAllowed = true;
+            // Embedded subtitle: "embed:<i>"
             var embedIdx = (typeof index === 'string' && index.indexOf('embed:') === 0)
                 ? parseInt(index.slice(6), 10)
                 : index;
+
+            /* Past the end of AVPlay's own track list its setSelectTrack is
+             * a no-op — it doesn't fail, it just leaves the track that was
+             * already showing on screen.  Read those out of the container
+             * instead; it's the only thing that renders them. */
+            if (row && row.beyondAvplay) {
+                var how = extractContainerTrack(row);
+                if (how) return how;
+                if (typeof Debug !== 'undefined')
+                    Debug.warn('embedded sub ' + embedIdx + ': past AVPlay\'s list and not ' +
+                               'extractable — nothing can render it');
+                return null;
+            }
+
+            avNativeSubsAllowed = true;
             try { av().setSilentSubtitle(false); } catch (e) {}
-            /* Logged either way: for a track past the end of AVPlay's own
-             * list this is the only signal of whether the firmware honours
-             * an index it never advertised. */
+            var selected = false;
             try {
                 av().setSelectTrack('TEXT', embedIdx);
+                selected = true;
                 if (typeof Debug !== 'undefined')
                     Debug.player('embedded sub: setSelectTrack TEXT ' + embedIdx + ' accepted');
             } catch (e) {
                 try {
                     av().setSelectTrack('SUBTITLE', embedIdx);
+                    selected = true;
                     if (typeof Debug !== 'undefined')
                         Debug.player('embedded sub: setSelectTrack SUBTITLE ' + embedIdx + ' accepted');
                 } catch (e2) {
@@ -1817,9 +2072,17 @@ var Player = (function () {
                                    ' rejected: ' + (e2.message || e2));
                 }
             }
-            return;
+            /* The firmware refused a track it had listed: fall back to
+             * reading it out of the container, same as the tail tracks. */
+            if (!selected) {
+                var alt = extractContainerTrack(row);
+                if (alt) return alt;
+                return null;
+            }
+            verifyNativeSubSelection(row, embedIdx);
+            return 'native';
         }
-        if (backend !== BACKEND_HTML5) return;
+        if (backend !== BACKEND_HTML5) return null;
 
         var v = h5el();
         // "Off" — disable every existing textTrack
