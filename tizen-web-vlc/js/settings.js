@@ -24,7 +24,7 @@ var Settings = (function () {
         subtitleBg:       'none',      // 'none' | 'box'  (translucent box behind text)
         // ── Video geometry ────────────────────────────────────────────────
         // How the picture is fitted to the screen: see AspectRatio below.
-        aspectMode:       'fit',       // 'fit' | 'fill' | 'stretch' | 'zoom110' | 'zoom125'
+        aspectMode:       'fit',       // 'fit' | 'fill' | 'stretch'
         // The TV's pairing code (url-drop.js mints it once and persists it
         // here).  It HAS to be listed: load() rebuilds the cache from this
         // object, so a key that isn't here is silently dropped on the next
@@ -322,26 +322,32 @@ var SubtitleStyle = (function () {
 })();
 
 
-/* Video aspect / zoom modes — how the picture is fitted to the screen.
+/* Video aspect modes — how the picture is fitted to the screen.
  *
- * Two different "black bars" exist and they need different fixes:
+ * There are three, and the reason there aren't more is worth writing down:
+ * two different kinds of "black bars" exist, and only one of them is the
+ * player's to fix.
  *
- *   1. The file really is wider than the screen (2.39:1 in a 2.39:1 frame).
- *      The player letterboxes it, and 'fill' — AVPlay's CROPPED_FULL, CSS
- *      object-fit:cover — scales the picture until it covers the screen and
- *      crops the sides instead.  Aspect is preserved.
- *   2. The bars are encoded INTO the frames (a 2.39:1 film muxed as 16:9).
- *      Nothing the display method does can help there: the frame already
- *      matches the screen, so all three display methods above produce an
- *      identical picture.  The only fix is to zoom past the frame edge,
- *      which the zoom and crop modes do by handing AVPlay a display rect
- *      larger than the screen (CSS transform:scale on the HTML5 backend).
+ *   1. The frame really is wider than the screen (a 2.39:1 frame on a 16:9
+ *      panel).  The firmware letterboxes it, and 'fill' — AVPlay's
+ *      CROPPED_FULL, CSS object-fit:cover — scales the picture until it
+ *      covers the screen and crops the sides instead, aspect preserved.
  *
- * The 'zoom*' modes magnify by a fixed amount.  The 'crop*' modes instead
- * name the shape the content really is, and player.js works out the zoom
- * from the frame AVPlay reports — 2.39:1 content inside a 16:9 frame needs
- * 1.34x, and no fixed step lands on that.  A frame already at or wider than
- * the target is left alone.
+ *   2. The bars are encoded INTO the frames — a 2.39:1 film muxed as 16:9,
+ *      which is what most streaming rips are.  As far as the firmware is
+ *      concerned the frame already matches the panel, so LETTER_BOX,
+ *      CROPPED_FULL and FULL_SCREEN all paint the same picture and none of
+ *      them can change anything.  Cropping bars like that means magnifying
+ *      past the frame edge: a display rect bigger than the screen and
+ *      centred on it.  A centred oversized rect has a negative origin, and
+ *      setDisplayRect "throws InvalidValuesError if any input parameter
+ *      contains a negative value" — Samsung's own AVPlay reference.  The
+ *      picture is always centred in the rect it is handed, so no legal rect
+ *      can push the top bar off the top of the screen, and AVPlay exposes no
+ *      source-crop or ROI call to do it another way.  Zoom and crop modes
+ *      were built and tried on two sets; neither moved a pixel.  They are
+ *      gone, and the player now says why rather than offering a mode that
+ *      cannot work.
  *
  * 'stretch' is the blunt instrument — fills the screen by distorting the
  * picture.  Some users prefer it, so it stays on the list, labelled.
@@ -349,32 +355,21 @@ var SubtitleStyle = (function () {
  * `av` values are Samsung AVPlay display methods; unsupported ones throw on
  * older firmware, and player.js falls back to LETTER_BOX when they do. */
 var AspectRatio = (function () {
-    /* Magnifying more than this stops being a crop and starts being a
-     * close-up, so no derived zoom goes past it. */
-    var MAX_CROP_ZOOM = 2;
-
     var MODES = [
-        { code: 'fit',     name: 'Fit screen (keep black bars)',  short: 'Fit',
-          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1 },
-        { code: 'fill',    name: 'Fill screen (crop the sides)',  short: 'Fill',
-          av: 'PLAYER_DISPLAY_MODE_CROPPED_FULL', fit: 'cover',   zoom: 1 },
-        { code: 'zoom110', name: 'Zoom 110% (crop baked-in bars)', short: '110%',
-          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1.10 },
-        { code: 'zoom125', name: 'Zoom 125% (crop baked-in bars)', short: '125%',
-          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1.25 },
-        // Streaming rips are mostly one of these two shapes letterboxed into
-        // a 16:9 frame, and the zoom each needs is a property of the file,
-        // not a number we can hard-code — hence targetDar.
-        { code: 'crop20',  name: 'Crop to 2:1 (remove baked-in bars)', short: '2:1',
-          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1, targetDar: 2 },
-        { code: 'crop239', name: 'Crop to 2.39:1 (remove baked-in bars)', short: '2.39',
-          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain', zoom: 1, targetDar: 2.39 },
+        { code: 'fit',     name: 'Fit screen (keep black bars)',    short: 'Fit',
+          av: 'PLAYER_DISPLAY_MODE_LETTER_BOX',   fit: 'contain' },
+        { code: 'fill',    name: 'Fill screen (crop the sides)',    short: 'Fill',
+          av: 'PLAYER_DISPLAY_MODE_CROPPED_FULL', fit: 'cover' },
         // 'Wide' is the label TVs traditionally put on a stretched 16:9
         // picture, and unlike 'Stretch' it fits inside the round OSD button.
         { code: 'stretch', name: 'Stretch (fills, distorts shape)', short: 'Wide',
-          av: 'PLAYER_DISPLAY_MODE_FULL_SCREEN',  fit: 'fill',    zoom: 1 }
+          av: 'PLAYER_DISPLAY_MODE_FULL_SCREEN',  fit: 'fill' }
     ];
 
+    function isKnown(code) {
+        for (var i = 0; i < MODES.length; i++) if (MODES[i].code === code) return true;
+        return false;
+    }
     function find(code) {
         for (var i = 0; i < MODES.length; i++) if (MODES[i].code === code) return MODES[i];
         return MODES[0];
@@ -383,23 +378,6 @@ var AspectRatio = (function () {
     function current() {
         if (typeof Settings === 'undefined') return MODES[0];
         return find(Settings.get('aspectMode'));
-    }
-    /* How far to magnify to crop `code`'s target shape out of a frame of
-     * `frameDar`.  The fixed 'zoom*' modes ignore the frame and return their
-     * own step; the 'crop*' modes derive it, because the zoom that clears
-     * baked-in bars is a property of the file — 2.39:1 content sits in a
-     * 16:9 frame with 1.34x of bar to lose, but in a 2:1 frame with only
-     * 1.19x.  A frame already at or wider than the target needs none.
-     *
-     * Kept here rather than in player.js so it is testable without a
-     * player; player.js supplies the frame AVPlay reports. */
-    function zoomFor(code, frameDar) {
-        var m = find(code);
-        if (!m.targetDar) return m.zoom || 1;
-        if (!(frameDar > 0)) return 1;
-        var z = m.targetDar / frameDar;
-        if (!(z > 1)) return 1;
-        return (z > MAX_CROP_ZOOM) ? MAX_CROP_ZOOM : z;
     }
 
     /* Next mode in the list — the OSD button cycles rather than opening a
@@ -413,8 +391,8 @@ var AspectRatio = (function () {
     return {
         forList: function () { return MODES; },
         find:    find,
+        isKnown: isKnown,
         current: current,
-        zoomFor: zoomFor,
         next:    next,
         nameFor:  function (c) { return find(c).name; },
         shortFor: function (c) { return find(c).short; }

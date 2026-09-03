@@ -280,7 +280,15 @@
             UI.toast('Playback finished');
             exitPlayer();
         });
+        // A track being read out of the container, or one that turned out
+        // unreadable — the only place the user hears about either.
+        Player.setListener('onsubnotice', function (msg) {
+            if (msg) UI.toast(msg);
+        });
         Player.setListener('onsubsupdated', function () {
+            // Tracks the container declared but AVPlay never listed land
+            // here — give an unmatched language preference another go.
+            retrySubtitlePreference();
             // MP4 embedded-sub extraction completed.  If the CC menu is
             // currently open, re-render it so the new entries appear.
             var menu = document.getElementById('track-menu');
@@ -309,7 +317,11 @@
         UI.showView('view-home');
         updateRepeatButton();        // reflect saved repeat preference on OSD
         updateShuffleButton();       // reflect saved shuffle preference on OSD
-        updateAspectButton();        // reflect saved aspect/zoom mode on OSD
+        /* A mode saved by an older build that no longer exists — the zoom
+           and crop modes AVPlay turned out to be incapable of — would show
+           as Fit on the OSD while the stored value said otherwise. */
+        if (!AspectRatio.isKnown(Settings.get('aspectMode'))) Settings.set('aspectMode', 'fit');
+        updateAspectButton();        // reflect the saved aspect mode on the OSD
         SubtitleStyle.apply();       // push saved subtitle appearance onto the overlay
     }
 
@@ -1273,11 +1285,11 @@
         if (Player.isSpeedMuted && Player.isSpeedMuted()) label += ' 🔇';
         btn.textContent = label;
     }
-    /* Video aspect / zoom (user request: "remove the black bars").  Unlike
-     * playback speed this IS persisted — someone who wants a filled screen
-     * wants it for every file, not just the one that's open.  Applying it
-     * mid-playback is safe on both backends, so the OSD button and the
-     * settings row share this one picker. */
+    /* Video aspect (user request: "remove the black bars").  Unlike playback
+     * speed this IS persisted — someone who wants a filled screen wants it
+     * for every file, not just the one that's open.  Applying it mid-playback
+     * is safe on both backends, so the OSD button and the settings row share
+     * this one picker. */
     function openAspectPicker() {
         var cur = Settings.get('aspectMode');
         openPicker('Video aspect ratio', AspectRatio.forList(), cur, function (val) {
@@ -1291,18 +1303,17 @@
 
     /* Fit / Fill / Wide all come out identical on a file whose frame already
      * matches the panel — the usual case, since most rips are 16:9 on a 16:9
-     * TV.  Saying so beats letting the user cycle every mode looking for the
-     * one that isn't broken. */
+     * TV — and any black bars on such a file are inside the picture, where
+     * nothing AVPlay can do will reach them (settings.js says why).  Telling
+     * the user that beats letting them cycle every mode looking for the one
+     * that isn't broken. */
     function aspectToastNote() {
         if (typeof Player.describeAspect !== 'function') return '';
         var d;
         try { d = Player.describeAspect(); } catch (e) { return ''; }
-        if (!d) return '';
-        if (d.noop)
-            return ' — no change: the picture already fills the screen. ' +
-                   'Bars inside the frame need a Crop mode.';
-        if (d.zoom > 1.005) return ' — zoom ' + Math.round(d.zoom * 100) + '%';
-        return '';
+        if (!d || !d.noop) return '';
+        return ' — no change: this picture already fills the screen. Black bars ' +
+               'inside the frames are part of the picture and can’t be cropped.';
     }
     function updateAspectButton() {
         var btn = document.getElementById('btn-aspect');
@@ -1311,7 +1322,7 @@
         btn.textContent = AspectRatio.shortFor(mode);
         // Highlight whenever the picture is NOT in the default fit mode, so
         // a cropped/stretched picture is never a mystery.
-        btn.classList.toggle('aspect-on', mode !== 'fit');
+        btn.classList.toggle('aspect-on', AspectRatio.isKnown(mode) && mode !== 'fit');
     }
     function openAutoPlayPicker() {
         pickerSetting = 'autoPlay';
@@ -1388,7 +1399,26 @@
         var h = document.getElementById(id);
         if (h) h.textContent = count > 1 ? (label + ' (' + count + ')') : label;
     }
+    /* Re-rendering while a track is being read out of the container must not
+     * throw the cursor back to the active row — the user may be part way
+     * down a 40-item list, and the progress label updates every few
+     * seconds. */
+    function focusedTrackRow() {
+        var el = document.querySelector('#track-menu li.focused');
+        var ul = el && el.parentNode;
+        if (!ul || (ul.id !== 'audio-tracks' && ul.id !== 'subtitle-tracks')) return null;
+        return { list: ul.id, index: [].indexOf.call(ul.children, el) };
+    }
+    function restoreTrackRowFocus(mark) {
+        if (!mark) return false;
+        var ul = document.getElementById(mark.list);
+        var li = ul && ul.children[mark.index];
+        if (!li) return false;
+        UI.focusOn(li);
+        return true;
+    }
     function openTrackMenu() {
+        var keepFocus = focusedTrackRow();
         var t = Player.getTracks();
         var aUL = document.getElementById('audio-tracks');
         var sUL = document.getElementById('subtitle-tracks');
@@ -1426,8 +1456,17 @@
             // the focus order too.
             if (tr.muted) { li.classList.add('muted'); sUL.appendChild(li); return; }
             li.addEventListener('click', function () {
-                Player.setSubtitleTrack(tr.off ? -1 : tr.index);
-                UI.toast('Subtitle: ' + tr.name);
+                // The row, not just its index: a track AVPlay can't select
+                // is read out of the container instead, and that path needs
+                // the container's own track number.
+                var how = Player.setSubtitleTrack(tr.off ? -1 : tr);
+                // 'extracting' announces itself through onsubnotice — a
+                // second toast here would only overwrite it.
+                if (how !== 'extracting') {
+                    UI.toast(how === null
+                        ? 'This TV can’t show ' + tr.name
+                        : 'Subtitle: ' + tr.name);
+                }
                 closeTrackMenu();
             });
             sUL.appendChild(li);
@@ -1435,8 +1474,10 @@
 
         document.getElementById('track-menu').classList.remove('hidden');
         UI.refreshFocusables();
-        // Land on the currently-active track if any, else the first real (non-
-        // muted) track item, else the Close button.
+        // Where the user already was, if this is a re-render.  Otherwise the
+        // currently-active track, else the first real (non-muted) track item,
+        // else the Close button.
+        if (restoreTrackRowFocus(keepFocus)) return;
         var first = document.querySelector('#track-menu .active') ||
                     document.querySelector('#track-menu .track-section li:not(.muted)') ||
                     document.querySelector('#track-menu button');
@@ -1668,10 +1709,12 @@
     }
 
     var prefsAppliedFor = null;
+    var subPrefSettled  = false;
     function applyLanguagePreferences() {
         // Only apply once per file to avoid clobbering manual selections
         if (prefsAppliedFor === state.playingUri) return;
         prefsAppliedFor = state.playingUri;
+        subPrefSettled  = false;
 
         var prefSub   = Settings.get('subtitleLang');
         var tracks    = Player.getTracks();
@@ -1683,37 +1726,59 @@
         // Subtitle: 'off' explicit, '' auto (no action), code → match
         if (prefSub === 'off') {
             Player.setSubtitleTrack(-1);
+            subPrefSettled = true;
             if (typeof Debug !== 'undefined') Debug.player('subtitle pref: off (silent)');
         } else if (prefSub) {
-            var wantSub = prefSub.toLowerCase();
-            // Score each candidate so we can prefer external SRT/VTT files
-            // over AVPlay's embedded (often broken) subtitle tracks.
-            var bestMatch = null;
-            var bestScore = 0;
-            for (var j = 0; j < tracks.subtitle.length; j++) {
-                var st = tracks.subtitle[j];
-                if (st.off) continue;
-
-                var sc = LanguageList.matchScore(wantSub, st.lang, st.name);
-                if (!sc) continue;
-
-                // External subs are reliable on this firmware; embedded ones
-                // often aren't.  Bump externals so they win ties.
-                if (st.type === 'AVPLAY_EXTERNAL' || st.type === 'HTML5_EXTERNAL') sc += 15;
-
-                if (sc > bestScore) { bestScore = sc; bestMatch = st; }
-            }
-            if (bestMatch) {
-                Player.setSubtitleTrack(bestMatch.index);
-                if (typeof Debug !== 'undefined')
-                    Debug.player('applied subtitle pref ' + prefSub + ' → ' + bestMatch.name + ' (score ' + bestScore + ')');
-            } else if (typeof Debug !== 'undefined') {
-                Debug.player('subtitle pref ' + prefSub + ': no matching track in ' +
-                             tracks.subtitle.map(function (x) { return x.name; }).join(' / '));
-            }
-        } else if (typeof Debug !== 'undefined') {
-            Debug.player('subtitle pref: auto (no preference set)');
+            applySubtitlePreference(prefSub, tracks);
+        } else {
+            subPrefSettled = true;
+            if (typeof Debug !== 'undefined') Debug.player('subtitle pref: auto (no preference set)');
         }
+    }
+
+    /* Score every candidate and take the best.  External subs are reliable
+     * on this firmware and embedded ones often aren't, so they win ties. */
+    function applySubtitlePreference(prefSub, tracks) {
+        var wantSub   = prefSub.toLowerCase();
+        var bestMatch = null;
+        var bestScore = 0;
+        for (var j = 0; j < tracks.subtitle.length; j++) {
+            var st = tracks.subtitle[j];
+            if (st.off || st.muted) continue;
+
+            var sc = LanguageList.matchScore(wantSub, st.lang, st.name);
+            if (!sc) continue;
+            if (st.type === 'AVPLAY_EXTERNAL' || st.type === 'HTML5_EXTERNAL') sc += 15;
+
+            if (sc > bestScore) { bestScore = sc; bestMatch = st; }
+        }
+        if (bestMatch) {
+            subPrefSettled = true;
+            Player.setSubtitleTrack(bestMatch);
+            if (typeof Debug !== 'undefined')
+                Debug.player('applied subtitle pref ' + prefSub + ' → ' + bestMatch.name +
+                             ' (score ' + bestScore + ')');
+            return true;
+        }
+        if (typeof Debug !== 'undefined')
+            Debug.player('subtitle pref ' + prefSub + ': no matching track in ' +
+                         tracks.subtitle.map(function (x) { return x.name; }).join(' / '));
+        return false;
+    }
+
+    /* The container's own track list is read after playback starts, so a
+     * preferred language that only exists in the tail of a 40-track mux
+     * becomes matchable a second or two late.  Retry then — but never over
+     * the top of a subtitle that is already showing, which would undo a
+     * choice the user just made by hand. */
+    function retrySubtitlePreference() {
+        if (subPrefSettled) return;
+        if (prefsAppliedFor !== state.playingUri) return;
+        var prefSub = Settings.get('subtitleLang');
+        if (!prefSub || prefSub === 'off') { subPrefSettled = true; return; }
+        var tracks = Player.getTracks();
+        if (!tracks.subtitle.length || !tracks.subtitle[0].active) return;   // one is showing
+        applySubtitlePreference(prefSub, tracks);
     }
 
     /* On the settings view, after the last focusable row there's a TV-info

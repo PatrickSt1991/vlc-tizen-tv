@@ -68,7 +68,6 @@ test('fit is the default aspect mode and keeps the letterbox', function () {
     assert.strictEqual(AspectRatio.forList()[0].code, 'fit');
     assert.strictEqual(fit.av, 'PLAYER_DISPLAY_MODE_LETTER_BOX');
     assert.strictEqual(fit.fit, 'contain');
-    assert.strictEqual(fit.zoom, 1);
 });
 
 test('fill crops instead of distorting, stretch distorts', function () {
@@ -78,46 +77,30 @@ test('fill crops instead of distorting, stretch distorts', function () {
     assert.strictEqual(AspectRatio.find('stretch').fit, 'fill');
 });
 
-test('the zoom modes scale past the frame edge', function () {
-    assert.ok(AspectRatio.find('zoom110').zoom > 1);
-    assert.ok(AspectRatio.find('zoom125').zoom > AspectRatio.find('zoom110').zoom);
+test('the list holds only modes AVPlay can actually carry out', function () {
+    /* Zoom and crop modes were offered for two releases and never moved a
+     * pixel: cropping bars baked into the frames needs a display rect bigger
+     * than the screen and centred on it, whose origin is negative, and
+     * setDisplayRect rejects a negative parameter.  They are gone rather
+     * than left on the list looking broken — every mode here is one of the
+     * three display methods the firmware really has. */
+    assert.deepStrictEqual(AspectRatio.forList().map(function (m) { return m.code; }),
+        ['fit', 'fill', 'stretch']);
+    AspectRatio.forList().forEach(function (m) {
+        assert.ok(/^PLAYER_DISPLAY_MODE_/.test(m.av), m.code + ' has no display method');
+        assert.strictEqual(m.zoom, undefined, m.code + ' still carries a zoom factor');
+        assert.strictEqual(m.targetDar, undefined, m.code + ' still carries a crop target');
+    });
 });
 
-test('the crop modes derive their zoom from the frame they are given', function () {
-    var SIXTEEN_NINE = 3840 / 2160;
-
-    // The case that prompted this: 2.39:1 content letterboxed into a 4K 16:9
-    // frame.  Measured on the file, the bars are 275 px top and 276 bottom of
-    // 2160, leaving 1609 px of picture — so 2160/1609 = 1.342x clears them.
-    var z = AspectRatio.zoomFor('crop239', SIXTEEN_NINE);
-    assert.ok(Math.abs(z - 2160 / 1609) < 0.01,
-        'expected ~1.34x to crop 2.39:1 out of 16:9, got ' + z);
-    // Neither fixed step lands there: 125% leaves a bar, and nothing offered
-    // 134% before.
-    assert.ok(z > AspectRatio.find('zoom125').zoom);
-
-    // 2:1 content in the same frame needs much less.
-    assert.ok(Math.abs(AspectRatio.zoomFor('crop20', SIXTEEN_NINE) - 1.125) < 0.001);
-
-    // A frame already that wide has no bars to crop, so it is left alone.
-    assert.strictEqual(AspectRatio.zoomFor('crop239', 2.39), 1);
-    assert.strictEqual(AspectRatio.zoomFor('crop20', 2.39), 1);
-    assert.strictEqual(AspectRatio.zoomFor('crop239', 2.5), 1);
-
-    // Nonsense frame data must not blank the screen.
-    assert.strictEqual(AspectRatio.zoomFor('crop239', 0), 1);
-    assert.strictEqual(AspectRatio.zoomFor('crop239', -1), 1);
-    // An absurdly tall frame is clamped rather than magnified without limit.
-    assert.strictEqual(AspectRatio.zoomFor('crop239', 0.1), 2);
-});
-
-test('zoomFor leaves the fixed and non-zooming modes as they are', function () {
-    assert.strictEqual(AspectRatio.zoomFor('fit', 16 / 9), 1);
-    assert.strictEqual(AspectRatio.zoomFor('fill', 16 / 9), 1);
-    assert.strictEqual(AspectRatio.zoomFor('stretch', 16 / 9), 1);
-    // Fixed steps ignore the frame entirely.
-    assert.strictEqual(AspectRatio.zoomFor('zoom110', 16 / 9), 1.10);
-    assert.strictEqual(AspectRatio.zoomFor('zoom125', 2.39), 1.25);
+test('a mode saved by an older build is not treated as current', function () {
+    // 1.4.0 could persist any of these; find() has to land on Fit and
+    // isKnown() has to let app.js write the setting back.
+    ['zoom110', 'zoom125', 'crop20', 'crop239', 'nonsense', '', undefined].forEach(function (code) {
+        assert.strictEqual(AspectRatio.isKnown(code), false, code + ' should be unknown');
+        assert.strictEqual(AspectRatio.find(code).code, 'fit');
+    });
+    assert.strictEqual(AspectRatio.isKnown('fill'), true);
 });
 
 test('an unknown mode falls back to fit, and next() cycles', function () {
