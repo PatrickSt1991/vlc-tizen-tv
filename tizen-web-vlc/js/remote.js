@@ -51,8 +51,16 @@ var Remote = (function () {
             'ChannelUp', 'ChannelDown',
             'Exit',
         ];
+        var failed = [];
         for (var i = 0; i < keys.length; i++) {
-            try { tizen.tvinputdevice.registerKey(keys[i]); } catch (e) {}
+            try { tizen.tvinputdevice.registerKey(keys[i]); }
+            catch (e) { failed.push(keys[i] + ' (' + ((e && e.name) || e) + ')'); }
+        }
+        /* A SecurityError here means config.xml lacks the tv.inputdevice
+         * privilege and NO media key will reach the app — the TV shows its
+         * own "key not supported" toast instead.  Surface it loudly. */
+        if (failed.length && typeof Debug !== 'undefined') {
+            Debug.warn('registerKey failed: ' + failed.join(', '));
         }
     }
 
