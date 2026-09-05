@@ -51,4 +51,8 @@
     <tizen:privilege name="http://tizen.org/privilege/filesystem.read"/>
     <tizen:privilege name="http://tizen.org/privilege/filesystem.write"/>
     <tizen:privilege name="http://tizen.org/privilege/download"/>
+    <!-- Required for tizen.tvinputdevice.registerKey(); without it the TV keeps
+         Play/Pause/FF/RW and the colour keys for itself and shows a
+         "not supported" toast when they're pressed. -->
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
 </widget>
