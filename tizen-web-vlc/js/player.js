@@ -782,13 +782,31 @@ var Player = (function () {
     var containerSubTracks     = [];
     var lastContainerListToken = 0;
 
-    /* The SMB proxy and the transcode server both carry the real filename in
-     * a query parameter, so testing the path's extension alone misses them. */
-    function looksLikeMatroska(url) {
-        var u = String(url || '');
-        return /\.(mkv|webm)(\?|#|$)/i.test(u) ||
-               /[?&][^=&]+=[^&]*\.(mkv|webm)(&|$)/i.test(u);
+    /* Which container an embedded-subtitle extractor exists for — 'MP4',
+     * 'MKV' or null — judged from the URL's path and from every query
+     * value: the SMB proxy and the transcode server both carry the real
+     * filename in a parameter, so the path's extension alone misses them. */
+    function embeddedSubContainer(url) {
+        var u = String(url || '').split('#')[0];
+        var q = u.indexOf('?');
+        var names = [q < 0 ? u : u.slice(0, q)];
+        if (q >= 0) {
+            var params = u.slice(q + 1).split('&');
+            for (var i = 0; i < params.length; i++) {
+                var eq  = params[i].indexOf('=');
+                var val = eq < 0 ? params[i] : params[i].slice(eq + 1);
+                try { val = decodeURIComponent(val); } catch (e) {}
+                names.push(val);
+            }
+        }
+        for (var n = 0; n < names.length; n++) {
+            var lower = names[n].toLowerCase();
+            if (/\.(mp4|m4v|mov)$/.test(lower)) return 'MP4';
+            if (/\.(mkv|webm)$/.test(lower))    return 'MKV';
+        }
+        return null;
     }
+    function looksLikeMatroska(url) { return embeddedSubContainer(url) === 'MKV'; }
 
     function listContainerSubTracks(uri, file) {
         containerSubTracks = [];
@@ -1171,14 +1189,19 @@ var Player = (function () {
         return 'PROGRESSIVE';
     }
 
-    /* Extract embedded text-subtitle tracks from a local MP4 / MKV / WebM,
-     * write each one to wgt-private-tmp as SRT, and append them to
-     * playerSubtitles so they appear in the CC menu alongside any sibling
-     * SRTs.
+    /* Extract embedded text-subtitle tracks from an MP4 / MKV / WebM and
+     * append them to playerSubtitles so they appear in the CC menu alongside
+     * any sibling SRTs, painted by the same poller.
      *
      * Workaround for the firmware bug where AVPlay's setSelectTrack('TEXT')
-     * only delivers the first cue.  setExternalSubtitlePath delivers cues
-     * correctly per-frame, so we route embedded subs through that path.
+     * only delivers the first cue — a track shows in the menu, gets picked,
+     * and nothing appears on screen.  That bug does not care where the bytes
+     * come from, so the extraction runs for a URL as well as for a drive:
+     * MP4 Range-reads the moov and the subtitle samples alone, which is as
+     * cheap over HTTP as it is locally.  A remote MKV is the exception —
+     * MkvSubs.extract() pulls the whole file in, which over a network is
+     * the movie downloaded twice, so it keeps to listContainerSubTracks()
+     * plus the cue-index read of the one track that gets picked.
      *
      * Fire-and-forget — extraction runs in parallel with avOpen().  If the
      * user has a preferred subtitle language and the matching track gets
@@ -1194,14 +1217,20 @@ var Player = (function () {
         activeEmbeddedSubExtraction = null;
     }
     function extractAndAppendEmbeddedSubs(url, file) {
-        var lower = String(url || '').toLowerCase().split('?')[0];
-        var extractor, label;
-        if (/\.mp4$|\.m4v$|\.mov$/.test(lower) && typeof Mp4Subs !== 'undefined') {
-            extractor = Mp4Subs; label = 'MP4';
-        } else if (/\.mkv$|\.webm$/.test(lower) && typeof MkvSubs !== 'undefined') {
-            extractor = MkvSubs; label = 'MKV';
-        } else {
-            return;
+        var label = embeddedSubContainer(url);
+        var extractor;
+        if (label === 'MP4' && typeof Mp4Subs !== 'undefined')      extractor = Mp4Subs;
+        else if (label === 'MKV' && typeof MkvSubs !== 'undefined') extractor = MkvSubs;
+        else return;
+
+        if (!isLocalUrl(url)) {
+            if (!/^https?:/i.test(String(url || ''))) return;   // rtsp, udp, …
+            if (label === 'MKV') {
+                if (typeof Debug !== 'undefined')
+                    Debug.player('MKV over a URL: tracks come from the header, ' +
+                                 'the picked one is read through the cue index');
+                return;
+            }
         }
 
         var token = ++lastExtractToken;
@@ -1359,17 +1388,18 @@ var Player = (function () {
 
             // In parallel with avOpen: scan the file for embedded text
             // subtitle tracks (MP4 / MKV / WebM) and route them through the
-            // working external-subtitle pipeline.  No-op for unsupported
-            // containers.  Keyed off opts.sourceUri rather than url so it
-            // still fires when a local file is being *played* through the
-            // transcode server — then `url` is an HLS manifest with no
-            // container to sniff, while the bytes still come from the Tizen
-            // File handle in opts.file.
+            // working external-subtitle pipeline — for a file on a drive and
+            // for an MP4 at an http(s) URL alike (a network stream, the SMB
+            // proxy).  No-op for unsupported containers.  Keyed off
+            // opts.sourceUri rather than url so it still fires when a file
+            // is being *played* through the transcode server — then `url` is
+            // an HLS manifest with no container to sniff, while the bytes
+            // still come from the original source.
             var subsSourceUri = opts.sourceUri || url;
             /* Kept for the whole file: picking a track the TV can't select
                means going back to these bytes for that one track's text. */
             subsSource = { uri: subsSourceUri, file: opts.file || null };
-            if (isLocalUrl(subsSourceUri)) extractAndAppendEmbeddedSubs(subsSourceUri, opts.file);
+            extractAndAppendEmbeddedSubs(subsSourceUri, opts.file);
             /* Independent of extraction, and not limited to local files: the
              * header read works over the SMB proxy too, and it is the only
              * thing that sees every track in a big multi-language mux. */

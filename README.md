@@ -26,9 +26,10 @@ with VLC-inspired UI and TV remote-friendly navigation.
 - **Full TV remote support** — D-pad navigation, OK/BACK, media keys
   (Play/Pause/Stop/FF/RW), audio + subtitle track picker
 - **External subtitles** — SRT / VTT / ASS·SSA / SAMI sidecar files and
-  embedded MP4/MKV text tracks, painted by the app (AVPlay can't render text
-  subs on this firmware), with **customisable size, font, position and
-  background** under Settings → Subtitle appearance
+  embedded MP4/MKV text tracks — from a USB drive, an SMB share or a network
+  URL alike — painted by the app (AVPlay can't render text subs on this
+  firmware), with **customisable size, font, position and background** under
+  Settings → Subtitle appearance
 - **Every embedded track selectable** — a 40-language mux lists all 40, and
   picking one the TV's own demuxer won't select (it stops at 32 tracks) reads
   that track's text straight out of the container through its cue index, so
