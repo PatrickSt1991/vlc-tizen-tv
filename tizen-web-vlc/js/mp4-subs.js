@@ -13,7 +13,9 @@
  * after the text (style, colour, etc.) are skipped.
  *
  * Large-file flow:
- *   1. Open a generic range reader for the local file.
+ *   1. Open a generic range reader — over the Tizen filesystem for a file
+ *      on a drive, over HTTP Range requests for a URL (a network stream,
+ *      the SMB proxy, the transcode server).
  *   2. Walk top-level MP4 boxes by declared size until moov is found.
  *   3. Parse moov track/sample tables to locate supported text tracks.
  *   4. Range-read only subtitle samples and append cues to live tracks.
@@ -350,7 +352,7 @@ var Mp4Subs = (function () {
         xhr.send();
     }
 
-    /* ── Incremental local-file extractor ────────────────────────────── */
+    /* ── Incremental extractor (local file or URL) ───────────────────── */
 
     var DEFAULT_CHUNK_BYTES = 4 * 1024 * 1024;
     var DEFAULT_INTERNAL_READ_BYTES = 256 * 1024;
@@ -509,8 +511,9 @@ var Mp4Subs = (function () {
         };
     }
 
-    // Prefer browser byte-range requests for file:// URIs when available;
-    // they can read large-file offsets without loading the whole movie.
+    // Byte-range requests through XMLHttpRequest — for file:// URIs where
+    // the WebView allows them, and for every http(s) URL.  They read
+    // large-file offsets without loading the whole movie.
     function makeXhrRangeReader(uri, size, timeoutMs) {
         return {
             implementation: 'XHR Range',
@@ -662,11 +665,83 @@ var Mp4Subs = (function () {
         };
     }
 
+    /* Range reader over an http(s) URL: a network stream, the bundled SMB
+     * proxy, or the transcode server.  A URL has no fileSize to read off,
+     * so one request for the first byte settles two things at once — that
+     * the server honours Range (206, not a 200 with the whole movie behind
+     * it) and, from Content-Range's total, how big the file is.  The
+     * verdict is in the headers, so a 200 is dropped the moment they
+     * arrive rather than after the body has been pulled in. */
+    function openUrlRangeReader(uri, options, cb) {
+        if (typeof XMLHttpRequest === 'undefined') {
+            later(function () { cb(Error('no XMLHttpRequest to read ' + uri)); });
+            return;
+        }
+
+        var xhr = new XMLHttpRequest();
+        var done = false;
+
+        function finish(err, size) {
+            if (done) return;
+            done = true;
+            if (err) {
+                try { xhr.abort(); } catch (e) {}
+                cb(err instanceof Error ? err : Error(String(err)));
+                return;
+            }
+            cb(null, makeXhrRangeReader(uri, size, options.xhrRangeTimeoutMs));
+        }
+
+        function judge() {
+            if (done) return;
+            var status = xhr.status;
+            if (status !== 206) {
+                finish(Error(status === 200 ? 'server does not honour Range requests'
+                                            : 'HTTP ' + status + ' probing ' + uri));
+                return;
+            }
+            var cr = '';
+            try { cr = xhr.getResponseHeader('Content-Range') || ''; } catch (e) {}
+            var m = /\/\s*(\d+)\s*$/.exec(cr);
+            var size = m ? parseInt(m[1], 10) : NaN;
+            if (!Number.isSafeInteger(size)) {
+                finish(Error('no total in Content-Range "' + cr + '"'));
+                return;
+            }
+            finish(null, size);
+        }
+
+        try {
+            xhr.open('GET', uri, true);
+            xhr.timeout = options.xhrRangeTimeoutMs;
+            xhr.responseType = 'arraybuffer';
+            xhr.setRequestHeader('Range', 'bytes=0-0');
+        } catch (e) {
+            later(function () { finish(e); });
+            return;
+        }
+
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState === 2 /* HEADERS_RECEIVED */) judge();
+        };
+        xhr.onload    = judge;   // a runtime that never reports readyState 2
+        xhr.onerror   = function () { finish(Error('probe failed: ' + uri)); };
+        xhr.ontimeout = function () { finish(Error('probe timed out: ' + uri)); };
+        xhr.send();
+    }
+
     /* Exposed as openReader() so mkv-subs.js can Range-read an MKV header
      * without duplicating the Tizen FileStream vintage handling below. */
     function openIncrementalReader(file, options, cb) {
         if (file && file.readRange && file.getSize) {
             later(function () { cb(null, file); });
+            return;
+        }
+
+        /* A URL rather than a file: nothing on the filesystem side applies. */
+        var remote = (typeof file === 'string') ? file : '';
+        if (/^https?:/i.test(remote)) {
+            openUrlRangeReader(remote, options, cb);
             return;
         }
 

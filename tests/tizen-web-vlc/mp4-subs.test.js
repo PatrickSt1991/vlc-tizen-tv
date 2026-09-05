@@ -292,3 +292,129 @@ test('cancels in-flight extraction without publishing callbacks', async function
     assert.strictEqual(callbackCount, 0, 'cancelled scans cannot publish callbacks');
     assert.ok(delayedReader.closed, 'reader closed on cancellation');
 });
+
+/* ── Reading an MP4 at an http(s) URL ─────────────────────────────────
+ *
+ * A network stream has no Tizen File behind it, so the extractor has to
+ * learn the file size from Content-Range and read everything through
+ * Range requests.  The fake server below answers the way the SMB proxy and
+ * the transcode server do — 206 + Content-Range — unless told to ignore
+ * Range, in which case it answers 200 with the whole file, as a naive
+ * origin would. */
+function fakeHttpServer(data, behaviour) {
+    behaviour = behaviour || {};
+    var log = { requests: [], instances: [] };
+
+    function FakeXhr() {
+        this.readyState = 0;
+        this.status = 0;
+        this.response = null;
+        this.responseType = '';
+        this.timeout = 0;
+        this.aborted = false;
+        this._req = {};
+        this._res = {};
+        log.instances.push(this);
+    }
+    FakeXhr.prototype.open = function (method, url) { this.method = method; this.url = url; };
+    FakeXhr.prototype.setRequestHeader = function (k, v) { this._req[k.toLowerCase()] = v; };
+    FakeXhr.prototype.getResponseHeader = function (k) { return this._res[k.toLowerCase()] || null; };
+    FakeXhr.prototype.abort = function () { this.aborted = true; };
+    FakeXhr.prototype.send = function () {
+        var self = this;
+        log.requests.push(this._req.range || '(no Range)');
+        setTimeout(function () {
+            var m = /^bytes=(\d+)-(\d+)$/.exec(self._req.range || '');
+            var body;
+            if (!m || behaviour.ignoreRange) {
+                self.status = 200;
+                body = data;
+                self._res['content-length'] = String(data.length);
+            } else {
+                var start = +m[1];
+                var end   = Math.min(+m[2], data.length - 1);
+                self.status = 206;
+                body = data.subarray(start, end + 1);
+                self._res['content-range'] = 'bytes ' + start + '-' + end + '/' + data.length;
+            }
+            self.readyState = 2;
+            if (self.onreadystatechange) self.onreadystatechange();
+            if (self.aborted) { if (self.onabort) self.onabort(); return; }
+            self.readyState = 4;
+            self.response = body.slice().buffer;
+            if (self.onprogress) self.onprogress({ lengthComputable: true, loaded: body.length, total: body.length });
+            if (self.onreadystatechange) self.onreadystatechange();
+            if (self.onload) self.onload();
+        }, 0);
+    };
+
+    log.XMLHttpRequest = FakeXhr;
+    return log;
+}
+
+function withFakeXhr(server, fn) {
+    var had = Object.prototype.hasOwnProperty.call(global, 'XMLHttpRequest');
+    var prev = global.XMLHttpRequest;
+    global.XMLHttpRequest = server.XMLHttpRequest;
+    return Promise.resolve().then(fn).finally(function () {
+        if (had) global.XMLHttpRequest = prev;
+        else delete global.XMLHttpRequest;
+    });
+}
+
+function openReader(source) {
+    return new Promise(function (resolve, reject) {
+        Mp4Subs.openReader(source, function (err, reader) {
+            if (err) reject(err); else resolve(reader);
+        });
+    });
+}
+
+test('opens an http URL as a range reader sized from Content-Range', async function () {
+    var data = fixture();
+    var server = fakeHttpServer(data);
+    await withFakeXhr(server, async function () {
+        var reader = await openReader('http://nas.local/movies/film.mp4');
+        var size = await new Promise(function (resolve, reject) {
+            reader.getSize(function (err, n) { if (err) reject(err); else resolve(n); });
+        });
+        assert.strictEqual(size, data.length, 'file size comes from the Content-Range total');
+        assert.deepStrictEqual(server.requests, ['bytes=0-0'], 'one single-byte probe, nothing more');
+        assert.strictEqual(server.instances[0].url, 'http://nas.local/movies/film.mp4');
+    });
+});
+
+test('extracts the embedded track of an MP4 at a URL through Range requests only', async function () {
+    var data = fixture();
+    var server = fakeHttpServer(data);
+    await withFakeXhr(server, async function () {
+        var result = await incremental('https://cdn.example/film.mp4?token=abc');
+        assert.strictEqual(result.tracks.length, 1);
+        assert.strictEqual(result.tracks[0].cues.length, 2);
+        assert.strictEqual(result.tracks[0].cues[0].text, 'Hello from a huge MP4');
+        assert.strictEqual(result.tracks[0].cues[1].text, 'Second cue');
+        assert.ok(server.requests.length > 1, 'read the moov and the samples after the probe');
+        assert.ok(server.requests.every(function (r) { return /^bytes=\d+-\d+$/.test(r); }),
+                  'every request carried a Range header: ' + server.requests.join(', '));
+    });
+});
+
+test('refuses a URL whose server ignores Range before the body is read', async function () {
+    var data = fixture();
+    var server = fakeHttpServer(data, { ignoreRange: true });
+    await withFakeXhr(server, async function () {
+        await assert.rejects(openReader('http://naive.example/film.mp4'), /does not honour Range/);
+        assert.strictEqual(server.instances.length, 1);
+        assert.ok(server.instances[0].aborted, 'the 200 was dropped at the headers, not downloaded');
+    });
+});
+
+test('non-http sources still go to the filesystem readers', async function () {
+    var server = fakeHttpServer(fixture());
+    await withFakeXhr(server, async function () {
+        // No `tizen` global in Node: the local path reports that, and must
+        // not have touched the network.
+        await assert.rejects(openReader('file:///opt/media/film.mp4'), /Tizen filesystem unavailable/);
+        assert.deepStrictEqual(server.requests, []);
+    });
+});
