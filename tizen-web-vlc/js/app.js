@@ -1732,8 +1732,29 @@
             applySubtitlePreference(prefSub, tracks);
         } else {
             subPrefSettled = true;
-            if (typeof Debug !== 'undefined') Debug.player('subtitle pref: auto (no preference set)');
+            adoptFileDefaultSubtitle(tracks);
         }
+    }
+
+    /* 'Auto (file default)': show the track the file itself marks default.
+     * AVPlay opens with that track current, and used to leave it there:
+     * the CC menu marked it selected, but the subtitle callback stays gated
+     * until a track is selected through Player.setSubtitleTrack, so nothing
+     * reached the screen until the user toggled it off and on (issue #73).
+     * Select it the way the CC menu does, so what the menu says and what
+     * the screen shows are the same thing. */
+    function adoptFileDefaultSubtitle(tracks) {
+        for (var j = 0; j < tracks.subtitle.length; j++) {
+            var st = tracks.subtitle[j];
+            if (st.off || st.muted || !st.avCurrent) continue;
+            var how = Player.setSubtitleTrack(st);
+            if (typeof Debug !== 'undefined')
+                Debug.player('subtitle pref: auto → file default ' + st.name + ' (' + how + ')');
+            return true;
+        }
+        if (typeof Debug !== 'undefined')
+            Debug.player('subtitle pref: auto — file has no default subtitle track');
+        return false;
     }
 
     /* Score every candidate and take the best.  External subs are reliable

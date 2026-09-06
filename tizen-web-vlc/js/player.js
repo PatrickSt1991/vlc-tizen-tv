@@ -268,8 +268,12 @@ var Player = (function () {
      * the firmware's stray "first cue of the default-selected embedded TEXT
      * track" fire at file-open doesn't flash on screen when the user has
      * subs off or has picked an external sub.  Flipped to true only when
-     * the user explicitly selects an embed:N entry from the CC menu, and
-     * back to false on "off" / external / new file. */
+     * an embed:N entry goes through setSubtitleTrack — the CC menu, or the
+     * 'Auto (file default)' preference adopting the track AVPlay opened on
+     * — and back to false on "off" / external / new file.  It is also what
+     * getTracks() reports as active: AVPlay keeps naming a "current" TEXT
+     * track even while silenced, so its word alone would mark a track as
+     * showing when nothing is painted (issue #73). */
     var avNativeSubsAllowed = false;
     function subEl() { return document.getElementById('subtitle-overlay'); }
     /* `runs` is optional and only ever set by the ASS path: a list of
@@ -1801,8 +1805,13 @@ var Player = (function () {
                         mkvTrack:     ct.number,
                         extractable:  containerSubExtractable(ct),
                         beyondAvplay: !known,
+                        /* The track AVPlay opened on — the file's default.
+                         * Not the same as showing: it is only painted once
+                         * selected through setSubtitleTrack. */
+                        avCurrent:    cIdx === activeTextIdx,
                         active: got ? (currentExternalSub === got)
-                                    : (!currentExternalSub && cIdx === activeTextIdx)
+                                    : (!currentExternalSub && avNativeSubsAllowed &&
+                                       cIdx === activeTextIdx)
                     });
                 }
                 disambiguateLabels(containerRows, containerSubTracks);
@@ -1823,10 +1832,13 @@ var Player = (function () {
                         type:   'AVPLAY_EMBED',
                         mkvTrack:    cnt ? cnt.number : 0,
                         extractable: cnt ? containerSubExtractable(cnt) : false,
+                        avCurrent:   nt.index === activeTextIdx,
                         // Only count as active if it's the currently selected
-                        // TEXT track AND no external sub is overriding it.
+                        // TEXT track, we are actually painting it, AND no
+                        // external sub is overriding it.
                         active: ext ? (currentExternalSub === ext)
-                                    : (!currentExternalSub && nt.index === activeTextIdx)
+                                    : (!currentExternalSub && avNativeSubsAllowed &&
+                                       nt.index === activeTextIdx)
                     });
                 }
             }
