@@ -8,7 +8,7 @@ var Settings = (function () {
     var KEY = 'vlctv_settings_v1';
     var defaults = {
         audioLang:        '',          // '' = auto (use file's default), or ISO code
-        subtitleLang:     'off',       // 'off' = no subs, '' = auto-pick first, or ISO code
+        subtitleLang:     'off',       // 'off' = no subs, '' = auto (file's default track), or ISO code
         repeatMode:       'off',       // 'off' | 'one'
         autoPlay:         false,       // auto-play the next file in the folder when one finishes
         shuffle:          false,       // randomize playlist order (folder + recent) instead of alphabetical
