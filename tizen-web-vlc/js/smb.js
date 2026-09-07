@@ -17,19 +17,29 @@ var SMB = (function () {
     var BASE = 'http://127.0.0.1:8127';
     var CREDS_KEY = 'vlctv_smb_v1';
 
-    /* All SMB-side activity goes to the PC debug listener under one tag so the
-     * connection flow is actually traceable (the old code called Debug.log,
-     * which doesn't exist, so nothing was ever sent). */
+    /* All SMB-side activity goes out through Debug under one tag, so it lands
+     * in the DevTools console (and the PC listener, if one is configured) and
+     * the connection flow is traceable end to end. */
     function dbg(msg) { if (typeof Debug !== 'undefined' && Debug.send) Debug.send('SMB', msg); }
 
-    /* Pull the service's own ring-buffer log and forward the tail to the PC
-     * listener — this is how we see the NEGOTIATE / auth / socket errors that
-     * happen inside the background service, which can't reach the PC itself. */
-    function dumpServiceLogs() {
+    /* Pull the service's own ring-buffer log and forward it under the SMB tag.
+     * The service is a separate process: its console is not the one DevTools
+     * shows when the app is inspected, so this is the only way the NEGOTIATE /
+     * auth / socket trail from inside it reaches the console (or the PC
+     * listener).  Called at each step of the connection flow, not just after
+     * a failure, and only the lines that arrived since the previous pull are
+     * forwarded so the trail reads in order without repeats. */
+    var lastSvcLine = null;
+    function dumpServiceLogs(why) {
         getJson(BASE + '/smb/debug/logs', function (err, res) {
             if (err || !res || !res.logs) { dbg('service logs unavailable: ' + (err ? err.message : 'none')); return; }
-            var logs = res.logs, from = Math.max(0, logs.length - 40);
-            for (var i = from; i < logs.length; i++) dbg('svc ' + logs[i]);
+            var logs = res.logs;
+            var from = lastSvcLine === null ? -1 : logs.lastIndexOf(lastSvcLine);
+            if (from < 0) from = Math.max(0, logs.length - 40) - 1;   // first pull, or ring buffer rolled past us
+            if (from + 1 >= logs.length) { dbg('svc (no new lines' + (why ? ', ' + why : '') + ')'); return; }
+            dbg('svc --- ' + (logs.length - from - 1) + ' line(s)' + (why ? ' after ' + why : '') + ' ---');
+            for (var i = from + 1; i < logs.length; i++) dbg('svc ' + logs[i]);
+            lastSvcLine = logs[logs.length - 1];
         });
     }
 
@@ -42,19 +52,26 @@ var SMB = (function () {
         try { localStorage.setItem(CREDS_KEY, JSON.stringify(c || {})); } catch (e) {}
     }
 
-    /* Accept smb://host:port, //host/share, host:port, or a bare host. Split
-     * the port out so it can reach the proxy (SmbConnection only honours
-     * opts.port), and never leave a colon in host: net.connect treats
-     * "ip:port" as a hostname and getaddrinfo ENOTFOUNDs it. */
+    /* Accept smb://host:port, //host/share, \\host\share, host:port, or a
+     * bare host. Split the port out so it can reach the proxy (SmbConnection
+     * only honours opts.port), and never leave a colon in host: net.connect
+     * treats "ip:port" as a hostname and getaddrinfo ENOTFOUNDs it.  Windows
+     * users type the share the way Explorer shows it, backslashes included,
+     * so those count as separators too.  Whatever followed the host is
+     * returned as `share` so the form can fall back on it when the Share
+     * field was left empty. */
     function normalizeServer(raw) {
         var s = String(raw == null ? '' : raw).trim();
-        s = s.replace(/^smb:\/\//i, '').replace(/^\/+/, ''); // drop scheme + slashes
-        s = s.split('/')[0];                                 // drop any host/share tail
+        s = s.replace(/\\/g, '/');                              // \\host\share → //host/share
+        s = s.replace(/^smb:\/\//i, '').replace(/^\/+/, '');   // drop scheme + leading slashes
+        var parts = s.split('/');
+        s = parts[0];
+        var share = (parts[1] || '').trim();
         var port = 0;
         var m = s.match(/^(\[[^\]]+\]|[^:]+):(\d+)$/);        // host:port (IPv6 in [])
         if (m) { s = m[1]; port = parseInt(m[2], 10); }
         s = s.replace(/^\[|\]$/g, '');                        // unwrap bare [ipv6]
-        return { host: s, port: port };
+        return { host: s, port: port, share: share };
     }
     function haveCreds() { var c = getCreds(); return !!(c.host && c.share); }
 
@@ -184,7 +201,12 @@ var SMB = (function () {
 
         list(path, function (err, entries) {
             ul.innerHTML = '';
-            if (err) { showError(err.message); return; }
+            if (err) {
+                dbg('list ' + JSON.stringify(path || '/') + ' failed: ' + err.message);
+                dumpServiceLogs('list failure');
+                showError(err.message);
+                return;
+            }
 
             // Playable files in this folder → the playlist for next/prev/auto-play.
             var playlist = entries
@@ -258,6 +280,9 @@ var SMB = (function () {
     /* Entry point from the home tile. */
     function openBrowser() {
         if (!haveCreds()) {
+            var c0 = getCreds();
+            dbg('openBrowser: no usable server saved (host=' + JSON.stringify(c0.host || '') +
+                ' share=' + JSON.stringify(c0.share || '') + ') → sending to Settings');
             UI.toast('Add your SMB server in Settings first');
             if (window.VlcApp && window.VlcApp.openSettings) window.VlcApp.openSettings();
             return;
@@ -277,12 +302,14 @@ var SMB = (function () {
         dbg('openBrowser');
         ensureService(function (err) {
             if (err) { dbg('ensureService failed: ' + err.message); showError(err.message); return; }
+            dumpServiceLogs('service start');
             connect(function (err2) {
                 if (err2) {
                     showError('Could not connect: ' + err2.message + ' — press Back to return');
-                    dumpServiceLogs();   // surface the service-side NEGOTIATE/auth/socket trail
+                    dumpServiceLogs('connect failure');   // the service-side NEGOTIATE/auth/socket trail
                     return;
                 }
+                dumpServiceLogs('connect');
                 render('');
             });
         });
@@ -336,13 +363,26 @@ var SMB = (function () {
                 nc[k] = el ? el.value.trim() : '';
             });
             nc.anonymous = anonState;
+            var typedHost = nc.host;
             var sv = normalizeServer(nc.host);
             nc.host = sv.host;
+            // Share precedence: explicit Share field > the path typed after the
+            // host (smb://nas/Media, \\nas\Media) > nothing.
+            if (!nc.share && sv.share) nc.share = sv.share;
             // Port precedence: explicit Port field > inline host:port > default.
             var typedPort = parseInt(nc.port, 10);
             nc.port = typedPort || sv.port || 445;
             setCreds(nc);
+            dbg('settings saved: typed host=' + JSON.stringify(typedHost) +
+                ' → host=' + JSON.stringify(nc.host) + ' port=' + nc.port +
+                ' share=' + JSON.stringify(nc.share) +
+                ' user=' + (nc.anonymous ? '(guest)' : JSON.stringify(nc.user || '')) +
+                ' pass=' + (nc.pass ? nc.pass.length + ' chars' : 'none') +
+                (nc.domain ? ' domain=' + JSON.stringify(nc.domain) : '') +
+                (nc.host && nc.share ? '' : '  ** host and share are both required **'));
             UI.toast('SMB server saved');
+            if (!nc.host || !nc.share)
+                UI.toast(nc.host ? 'Share name is missing' : 'Server address is missing');
         });
     }
 
@@ -363,6 +403,10 @@ var SMB = (function () {
         applyCreds:      applyCreds,
         streamUrl:       streamUrl,
         dumpServiceLogs: dumpServiceLogs,
+        normalizeServer: normalizeServer,   // exposed for the Node tests
         isStreamUrl:     function (u) { return typeof u === 'string' && u.indexOf(BASE + '/smb/stream') === 0; }
     };
 })();
+
+// Ignored by the Tizen/browser build; lets Node tests drive the module.
+if (typeof module !== 'undefined' && module.exports) module.exports = SMB;

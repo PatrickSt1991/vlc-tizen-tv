@@ -786,7 +786,13 @@ function handleConnect(req, res) {
     req.on('end', function () {
         var creds;
         try { creds = JSON.parse(raw || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
-        if (!creds.host || !creds.share) return sendJson(res, 400, { ok: false, error: 'host and share required' });
+        log('CONNECT_REQ', { host: creds.host, port: creds.port || 445, share: creds.share,
+                             user: creds.anonymous ? '(guest)' : (creds.user || ''),
+                             domain: creds.domain || '', pass: creds.pass ? creds.pass.length + ' chars' : 'none' });
+        if (!creds.host || !creds.share) {
+            log('CONNECT_REJECTED', 'host and share required');
+            return sendJson(res, 400, { ok: false, error: 'host and share required' });
+        }
         // Drop any stale connection for this share so creds changes take effect.
         var key = connKey(creds);
         if (conns[key]) { try { conns[key]._die('reconnect'); } catch (e) {} delete conns[key]; }
@@ -797,6 +803,7 @@ function handleConnect(req, res) {
             getConn(creds, function (err, c) {
                 if (err) { log('CONNECT_FAIL', err.message); return sendJson(res, 502, { ok: false, error: err.message }); }
                 lastCreds = creds;
+                log('CONNECT_OK', { dialect: '0x' + c.dialect.toString(16), signing: c.signing });
                 sendJson(res, 200, { ok: true, dialect: '0x' + c.dialect.toString(16), signing: c.signing });
             });
         } catch (e) {
